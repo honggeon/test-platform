@@ -1,0 +1,56 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+*.egg-info/
+dist/
+build/
+
+# Node
+ui/node_modules/
+ui/.next/
+ui/out/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# LangGraph
+.langgraph_api/
+backend/.langgraph_api/
+
+# Logs & runtime
+logs/
+*.log
+nohup.out
+
+# Env
+.env
+.env.local
+.env.*.local
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+playwright-report/
+test-results/
+coverage/
+
+# Misc
+*.pid
+
+# Workspace generated files
+backend/workspace/
+backend/backend/

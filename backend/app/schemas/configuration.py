@@ -1,0 +1,70 @@
+"""
+配置相关的 Pydantic 模型
+
+基于 BrowserStack Test Management API 的配置接口设计
+参考: https://www.browserstack.com/docs/test-management/api-reference/configurations
+"""
+"""
+版权所有 (c) 2023-2026 北京慧测信息技术有限公司(但问智能) 保留所有权利。
+
+本代码版权归北京慧测信息技术有限公司(但问智能)所有，仅用于学习交流目的，未经公司商业授权，
+不得用于任何商业用途，包括但不限于商业环境部署、售卖或以任何形式进行商业获利。违者必究。
+
+授权商业应用请联系微信：huice666
+"""
+
+
+from datetime import datetime
+from typing import Optional
+
+from pydantic import BaseModel, Field
+
+
+class ConfigurationCreate(BaseModel):
+    """
+    创建自定义配置请求模型
+    """
+    name: str = Field(..., min_length=1, max_length=500, description="配置名称")
+    os: Optional[str] = Field(default=None, max_length=100, description="操作系统")
+    os_version: Optional[str] = Field(default=None, max_length=100, description="操作系统版本")
+    device: Optional[str] = Field(default=None, max_length=200, description="设备")
+    browser: Optional[str] = Field(default=None, max_length=100, description="浏览器")
+    browser_version: Optional[str] = Field(default=None, max_length=100, description="浏览器版本")
+    description: Optional[str] = Field(default=None, description="配置描述")
+
+
+class ConfigurationInfo(BaseModel):
+    """
+    配置信息响应模型
+    
+    用于返回配置详细信息 (符合 BrowserStack API 格式)
+    """
+    id: int = Field(..., description="配置 ID")
+    name: str = Field(..., description="配置名称")
+    os: Optional[str] = Field(default=None, description="操作系统")
+    os_version: Optional[str] = Field(default=None, description="操作系统版本")
+    device: Optional[str] = Field(default=None, description="设备")
+    browser: Optional[str] = Field(default=None, description="浏览器")
+    browser_version: Optional[str] = Field(default=None, description="浏览器版本")
+    is_system: bool = Field(..., description="是否为系统定义配置")
+
+
+class ConfigurationDetailInfo(ConfigurationInfo):
+    """
+    配置详细信息响应模型
+    
+    包含时间戳等额外信息
+    """
+    description: Optional[str] = Field(default=None, description="配置描述")
+    created_at: Optional[datetime] = Field(default=None, description="创建时间")
+    updated_at: Optional[datetime] = Field(default=None, description="更新时间")
+
+
+class ConfigurationCreateResponse(BaseModel):
+    """
+    创建配置响应模型 (符合 BrowserStack API 格式)
+    """
+    success: bool = Field(default=True, description="是否成功")
+    id: int = Field(..., description="配置 ID")
+    name: str = Field(..., description="配置名称")
+

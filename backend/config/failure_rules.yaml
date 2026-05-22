@@ -1,0 +1,110 @@
+# 失败规则库
+#
+# 日志分析 Agent 使用的规则匹配配置。
+# 每条规则定义了根因分类的匹配条件、优先级和置信度。
+#
+# status_code 说明:
+#   - 空列表 []: 不限制状态码（匹配任意状态码）
+#   - ["*"]: 也表示不限制状态码
+#   - [401, 403]: 仅匹配指定状态码
+
+rules:
+  - id: token_expired_rule_1
+    category: token_expired
+    priority: 100
+    enabled: true
+    description: "认证令牌过期或无效（401）"
+    confidence: 0.95
+    conditions:
+      status_code: [401]
+      error_message_patterns:
+        - "token.*expir"
+        - "invalid_token"
+        - "unauthorized"
+        - "jwt.*invalid"
+        - "access_token.*invalid"
+
+  - id: permission_denied_rule_1
+    category: permission_denied
+    priority: 95
+    enabled: true
+    description: "权限不足或访问被拒绝（403）"
+    confidence: 0.90
+    conditions:
+      status_code: [403]
+      error_message_patterns:
+        - "forbidden"
+        - "insufficient"
+        - "permission.*denied"
+        - "not.*allowed"
+        - "role.*required"
+
+  - id: api_changed_rule_1
+    category: api_changed
+    priority: 90
+    enabled: true
+    description: "API 端点不存在或已移除（404）"
+    confidence: 0.90
+    conditions:
+      status_code: [404]
+      error_message_patterns:
+        - "not found"
+        - "no route"
+        - "no endpoint"
+
+  - id: api_changed_rule_2
+    category: api_changed
+    priority: 80
+    enabled: true
+    description: "数据库字段或 API Schema 变更（400/422）"
+    confidence: 0.85
+    conditions:
+      status_code: [400, 422]
+      error_message_patterns:
+        - "column.*not found"
+        - "field.*unknown"
+        - "unknown column"
+
+  - id: data_error_rule_1
+    category: data_error
+    priority: 70
+    enabled: true
+    description: "请求数据格式或验证失败（400）"
+    confidence: 0.85
+    conditions:
+      status_code: [400]
+      error_message_patterns:
+        - "validation"
+        - "constraint"
+        - "not null"
+        - "invalid.*format"
+
+  - id: network_timeout_rule_1
+    category: network_timeout
+    priority: 60
+    enabled: true
+    description: "网络超时或服务不可用（504/502/503）"
+    confidence: 0.90
+    conditions:
+      status_code: [504, 502, 503]
+      error_message_patterns:
+        - "timeout"
+        - "ETIMEDOUT"
+        - "ECONNREFUSED"
+        - "connection refused"
+
+  - id: script_error_rule_1
+    category: script_error
+    priority: 50
+    enabled: true
+    description: "测试脚本自身代码错误（不限状态码）"
+    confidence: 0.95
+    conditions:
+      # status_code: [] 表示不限制状态码（匹配任意状态码）
+      status_code: []
+      error_message_patterns:
+        - "TypeError"
+        - "ReferenceError"
+        - "SyntaxError"
+        - "cannot read property"
+        - "is not a function"
