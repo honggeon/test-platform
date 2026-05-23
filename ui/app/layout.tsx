@@ -8,14 +8,18 @@
  */
 
 import type { Metadata } from "next";
-import { Inter } from "next/font/google";
+import { Plus_Jakarta_Sans } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { Toaster } from "sonner";
 import { LanguageProvider } from "@/providers/LanguageProvider";
 import { DiagnosisToastListener } from "@/components/diagnosis/DiagnosisToastListener";
 import "./globals.css";
 
-const inter = Inter({ subsets: ["latin"] });
+const plusJakartaSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["300", "400", "500", "600", "700"],
+  variable: "--font-sans",
+});
 
 export const metadata: Metadata = {
   title: "宏革智能测试平台",
@@ -29,7 +33,7 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className={inter.className} suppressHydrationWarning>
+      <body className={plusJakartaSans.className} suppressHydrationWarning>
         <LanguageProvider>
           <NuqsAdapter>{children}</NuqsAdapter>
           <Toaster />

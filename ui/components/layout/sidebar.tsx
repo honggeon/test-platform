@@ -1,12 +1,3 @@
-/**
- * 版权所有 (c) 2023-2026 北京慧测信息技术有限公司(但问智能) 保留所有权利。
- * 
- * 本代码版权归北京慧测信息技术有限公司(但问智能)所有，仅用于学习交流目的，未经公司商业授权，
- * 不得用于任何商业用途，包括但不限于商业环境部署、售卖或以任何形式进行商业获利。违者必究。
- * 
- * 授权商业应用请联系微信：huice666
- */
-
 "use client";
 
 import * as React from "react";
@@ -123,22 +114,22 @@ export function Sidebar({
   };
 
   return (
-    <div className="flex h-full w-60 flex-col border-r bg-card">
+    <div className="flex h-full w-60 flex-col bg-sidebar text-sidebar-foreground">
       {/* Logo */}
-      <div className="flex h-14 items-center border-b px-4">
+      <div className="flex h-14 items-center border-b border-sidebar-border px-4">
         <Link href="/projects" className="flex items-center gap-2">
           <img src="/logo.svg" alt="logo" className="h-6 w-6" />
-          <span className="font-semibold">{t("meta.title")}</span>
+          <span className="font-semibold tracking-tight">{t("meta.title")}</span>
         </Link>
       </div>
 
       {/* Project Selector */}
-      <div className="border-b p-3">
+      <div className="border-b border-sidebar-border p-3">
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button
-              variant="outline"
-              className="w-full justify-between"
+              variant="ghost"
+              className="w-full justify-between border-sidebar-border bg-sidebar-accent text-sidebar-foreground hover:bg-sidebar-accent/80 hover:text-sidebar-foreground"
               disabled={projects.length === 0}
             >
               <span className="truncate">
@@ -169,8 +160,12 @@ export function Sidebar({
         <nav className="flex flex-col gap-1">
           <Link href="/projects">
             <Button
-              variant={pathname === "/projects" ? "secondary" : "ghost"}
-              className="w-full justify-start"
+              variant="ghost"
+              className={cn(
+                "w-full justify-start text-sidebar-foreground/70 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-200",
+                pathname === "/projects" &&
+                  "bg-sidebar-accent text-sidebar-foreground"
+              )}
             >
               <Home className="mr-2 h-4 w-4" />
               {t("nav.allProjects")}
@@ -179,16 +174,28 @@ export function Sidebar({
 
           {currentProject && (
             <>
-              <div className="my-2 px-2 text-xs font-medium text-muted-foreground">
+              <div className="my-2 px-2 text-[10px] font-semibold uppercase tracking-wider text-sidebar-foreground/40">
                 {t("nav.projectNavigation")}
               </div>
               {navItems.map((item) => (
                 <Link key={item.href} href={getNavHref(item.href)}>
                   <Button
-                    variant={isActive(item.href) ? "secondary" : "ghost"}
-                    className="w-full justify-start"
+                    variant="ghost"
+                    className={cn(
+                      "group relative w-full justify-start text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-all duration-200",
+                      isActive(item.href) &&
+                        "bg-sidebar-accent text-sidebar-foreground font-medium"
+                    )}
                   >
-                    <item.icon className="mr-2 h-4 w-4" />
+                    {isActive(item.href) && (
+                      <span className="absolute left-0 top-1/2 -translate-y-1/2 h-5 w-0.5 rounded-full bg-sky-500 transition-all duration-200" />
+                    )}
+                    <item.icon
+                      className={cn(
+                        "mr-2 h-4 w-4 transition-transform duration-200",
+                        isActive(item.href) && "text-sky-400"
+                      )}
+                    />
                     {item.title}
                   </Button>
                 </Link>
@@ -199,8 +206,11 @@ export function Sidebar({
       </ScrollArea>
 
       {/* Footer */}
-      <div className="border-t p-3">
-        <Button variant="ghost" className="w-full justify-start">
+      <div className="border-t border-sidebar-border p-3">
+        <Button
+          variant="ghost"
+          className="w-full justify-start text-sidebar-foreground/60 hover:text-sidebar-foreground hover:bg-sidebar-accent transition-colors duration-200"
+        >
           <Settings className="mr-2 h-4 w-4" />
           {t("nav.settings")}
         </Button>
@@ -208,4 +218,3 @@ export function Sidebar({
     </div>
   );
 }
-
