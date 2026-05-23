@@ -1,17 +1,18 @@
 {
   "dependencies": [
-    "."
+    ".",
+    "./backend"
   ],
   "_buildId": "id_MC81OmFIVnBZMlhwbVlqbHJvL3BuYWs2TkZvMlNnPT06NDg4ODM1ZmE=",
   "graphs": {
     "api_agent": {
-      "path": "./backend/app/agents/api/agent.py:agent"
+      "path": "app.agents.api.agent:agent"
     },
     "code_analysis_agent": {
-      "path": "./backend/app/agents/code/agent.py:agent"
+      "path": "app.agents.code.agent:agent"
     },
     "log_analysis_agent": {
-      "path": "./backend/app/agents/log_analysis/agent.py:agent"
+      "path": "app.agents.log_analysis.agent:agent"
     }
   },
   "_deployId": "id_MS81OmFIVnBZMlhwbVlqbHJvL3BuYWs2TkZvMlNnPT06NDg4ODM1ZmE=",

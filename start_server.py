@@ -37,6 +37,7 @@ def setup_environment():
             graphs = config.get("graphs", {})
         
         # 将相对路径解析为绝对路径，避免 LangGraph 内部工作目录变化导致路径错误
+        # 注意: 区分文件路径 (含 / 或 .py) 和 Python 模块路径 (如 app.agents.api.agent)
         root_dir = Path(__file__).parent.resolve()
         for name, spec in graphs.items():
             path = spec.get("path", "")
@@ -44,6 +45,9 @@ def setup_environment():
                 file_part, var_part = path.rsplit(":", 1)
             else:
                 file_part, var_part = path, "agent"
+            # Python 模块路径 (用 . 分隔，不含 / 和 .py)，不需要解析为文件路径
+            if "/" not in file_part and not file_part.endswith(".py"):
+                continue
             file_path = Path(file_part)
             if not file_path.is_absolute():
                 file_path = (root_dir / file_path).resolve()
