@@ -130,6 +130,14 @@ export interface WSPingPayload {
   type: "ping";
 }
 
+export interface WSDiagnosisProgressPayload {
+  type: "diagnosis_progress";
+  report_id: string;
+  phase: string;
+  message: string;
+  progress?: number;
+}
+
 export type WSClientMessage =
   | { type: "pong" }
   | { type: "ack"; report_id: string };
@@ -137,6 +145,7 @@ export type WSClientMessage =
 export type WSServerMessage =
   | WSPingPayload
   | WSDiagnosisCompletedPayload
+  | WSDiagnosisProgressPayload
   | WSUnreadReportsPayload;
 
 // ==================== 创建诊断请求/响应 ====================

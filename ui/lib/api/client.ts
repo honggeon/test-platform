@@ -41,7 +41,7 @@ async function handleResponse<T>(response: Response): Promise<T> {
 
   if (!response.ok) {
     const message =
-      (isJson && typeof data === 'object' && (data as any)?.message) || `HTTP error! status: ${response.status}`;
+      (isJson && typeof data === 'object' && ((data as any)?.message || (data as any)?.detail)) || `HTTP error! status: ${response.status}`;
     throw new ApiError(message, response.status, data);
   }
 

@@ -1,0 +1,36 @@
+基础配置: #固定的key
+  用例类型: ApiCase  #WebCase AppCase  ApiCase
+  用例标题: 购物车用例
+  一级模块: 购物车模块  #把登陆相关的放在一个模块中  把扩展相关的放在一个模块里面
+  二级模块: 购物车功能
+
+前置脚本: ""
+
+后置脚本: ""
+
+用例步骤:
+- 发送购物车接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}"
+    URL参数:
+      s: /api/cart/save
+      application: app
+      application_client_type: weixin
+      "token": '{{msg_token}}'
+    请求数据:
+      goods_id: "2"
+      stock: 3
+    请求类型: json
+
+
+- 提取响应数据-MSG: #实际结果提取出来
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_data
+
+- 断言响应数据MSG:
+    操作类型: 断言文本相等
+    期望结果: 加入成功
+    实际结果: "{{msg_data}}"
+
+

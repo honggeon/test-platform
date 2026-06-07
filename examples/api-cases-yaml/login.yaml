@@ -1,0 +1,77 @@
+基础配置:  #后续测试报告中显示
+  用例类型: ApiCase
+  用例标题: 登录用例标题
+  一级模块: 登录模块
+  二级模块: 登录功能
+
+前置脚本: ""
+#  - "context.update({'uname':'youer'})"  #放在全局变量中
+#  - |
+#    import random
+#    context.update({'uname':'youer'+str(random.randint(1000,9999))})
+
+后置脚本: ""
+#  - "print('后置脚本')"
+
+
+用例步骤:
+- 发送登录接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}"  #加不加index.php对于这个商城项目接口都可以  如果加可以在后面加个/index.php  "http://shop-xo.hctestedu.com"
+    URL参数:
+      s: /api/user/login
+      application: app
+      application_client_type: weixin
+    请求数据:
+      accounts: "youyi"
+      pwd: "123456"
+      type: "username"
+
+- 提取响应数据token:
+    操作类型: 提取数据JSON
+    表达式: $..token
+    变量名: msg_token
+
+- 提取响应数据msg:  #实际结果
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: sj_msg
+
+- 断言响应数据:  #预期结果和实际结果对比  assert 预期结果>实际结果，"错误时显示信息"
+    操作类型: 断言文本
+    期望结果: 登录成功
+    实际结果: "{{sj_msg}}"
+    比较符: ==
+
+- 断言响应数据:  #优化 想要字面文本相等  文本不想等  数字>  数字<  数字>=  数字<=  数字<>  数字==  数字!=
+    操作类型: 断言文本相等
+    期望结果: 登录成功
+    实际结果: "{{sj_msg}}"
+
+- 断言响应数据:  #优化
+    操作类型: 断言文本包含
+    期望结果: 登录成功
+    实际结果: "{{sj_msg}}"
+
+- 深度断言响应数据:  #预期结果和实际结果对比  assert 预期结果>实际结果，"错误时显示信息"
+    操作类型: 批量断言
+    期望结果: {'msg': '登录成功', 'code': 0, 'data': {'id': '2', 'username': 'youyi', 'nickname': '', 'mobile': '', 'email': '', 'avatar': 'http://shop-xo.hctestedu.com/static/upload/images/user_avatar/compr/2025/07/05/202507051618191471059059.jpg', 'alipay_openid': '', 'weixin_openid': '', 'weixin_unionid': '', 'weixin_web_openid': '', 'baidu_openid': '', 'toutiao_openid': '', 'qq_openid': '', 'qq_unionid': '', 'integral': '0', 'locking_integral': '0', 'referrer': '0', 'add_time': '1750923161', 'add_time_text': '2025-06-26 15:32:41', 'mobile_security': '', 'email_security': '', 'user_name_view': 'youyi', 'is_mandatory_bind_mobile': 0, 'token': '9ea1c413a9c990bbc3973dd67390303f'}}
+    过滤字段: ["root['data']['token']"]
+
+
+- 提取数据库数据:  #优化
+    操作类型: 提取数据库MYSQL
+    数据库: 电商数据库
+    SQL: "select id,username from sxo_user where username='youyi'"
+#    变量名: [uid,uname]
+#变量名可以写 也可以不写   理解1  不能理解2
+#不写 id_1: 2  username_1: youyi  id_2: 2  username_2: youyi
+#写了  uid_1: 2  uname_1: youyi  uid_2: 2  uname_2: youyi
+
+
+- 数据库断言:  #优化
+    操作类型: 断言文本相等
+    期望结果: "youyi"
+    实际结果: '{{username_1}}' #从数据库里面获取到的数据是不是youyi
+
+

@@ -299,6 +299,64 @@ class APITestService:
 
         await self.api_test_repo.delete(api_test)
 
+    async def bulk_delete_api_tests(
+        self,
+        project_identifier: str,
+        api_test_ids: list[str],
+    ) -> dict:
+        """批量删除 API 测试"""
+        project = await self._get_project_by_identifier(project_identifier)
+        deleted_count = 0
+        failed_ids = []
+
+        for api_test_id in api_test_ids:
+            try:
+                api_test = await self.api_test_repo.get_by_id(UUID(api_test_id))
+                if api_test and api_test.project_id == project.id:
+                    await self.api_test_repo.delete(api_test)
+                    deleted_count += 1
+                else:
+                    failed_ids.append(api_test_id)
+            except Exception:
+                failed_ids.append(api_test_id)
+
+        return {
+            "deleted_count": deleted_count,
+            "failed_ids": failed_ids,
+        }
+
+    async def bulk_run_api_tests(
+        self,
+        project_identifier: str,
+        api_test_ids: list[str],
+        execution_config: dict | None = None,
+    ) -> dict:
+        """批量执行 API 测试"""
+        project = await self._get_project_by_identifier(project_identifier)
+        run_ids = []
+        failed_ids = []
+
+        executor = APITestExecutor(self.session, self.mongodb)
+        for api_test_id in api_test_ids:
+            try:
+                api_test = await self.api_test_repo.get_by_id(UUID(api_test_id))
+                if api_test and api_test.project_id == project.id:
+                    run_id = await executor.execute_test(
+                        api_test_id=api_test.id,
+                        execution_config=execution_config or {},
+                    )
+                    run_ids.append(str(run_id))
+                else:
+                    failed_ids.append(api_test_id)
+            except Exception:
+                failed_ids.append(api_test_id)
+
+        return {
+            "run_ids": run_ids,
+            "failed_ids": failed_ids,
+            "total": len(api_test_ids),
+        }
+
     # ==================== 测试脚本管理 ====================
 
     async def get_test_script(

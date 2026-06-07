@@ -57,7 +57,8 @@ import {
   type TestCaseFilters,
 } from "./test-case-filter-panel";
 import { TableRowSkeleton, FilterBarSkeleton } from "./test-case-skeleton";
-import type { TestCaseInfo, Priority, TestCaseState, TestCaseTemplate } from "@/lib/api/types";
+import { updateLatestTestResult } from "@/lib/api/testCases";
+import type { TestCaseInfo, Priority, TestCaseState, TestCaseTemplate, TestResultStatus } from "@/lib/api/types";
 import {
   DndContext,
   DragOverlay,
@@ -77,6 +78,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 
 interface TestCaseListProps {
+  projectId?: string;
   testCases: TestCaseInfo[];
   loading: boolean;
   selectedIds: Set<string>;
@@ -92,7 +94,9 @@ interface TestCaseListProps {
   onDeleteTestCase: (testCase: TestCaseInfo) => void;
   onBulkDelete?: () => void;
   onViewTestCase: (testCase: TestCaseInfo) => void;
+  onLatestResultChange?: (testCase: TestCaseInfo) => void;
   onQuickCreateTestCase?: (title: string, template: TestCaseTemplate) => void;
+  onImport?: () => void;
   onAIGenerate?: () => void;
   onAIGenerateFromDocument?: () => void;
   onOpenAIChat?: () => void;
@@ -116,7 +120,52 @@ const priorityColors: Record<Priority, string> = {
   low: "bg-green-500",
 };
 
+const latestResultLabels: Record<TestResultStatus, string> = {
+  passed: "通过",
+  failed: "失败",
+  skipped: "跳过",
+  blocked: "阻塞",
+  not_executed: "未执行",
+};
+
+const latestResultBadgeStyles: Record<TestResultStatus, string> = {
+  passed: "border-green-200 bg-green-50 text-green-700",
+  failed: "border-red-200 bg-red-50 text-red-700",
+  skipped: "border-yellow-200 bg-yellow-50 text-yellow-700",
+  blocked: "border-orange-200 bg-orange-50 text-orange-700",
+  not_executed: "border-muted bg-muted/40 text-muted-foreground",
+};
+
+const latestResultOptions: { value: string; label: string }[] = [
+  { value: "not_tested", label: "未测试" },
+  { value: "passed", label: "通过" },
+  { value: "failed", label: "失败" },
+  { value: "skipped", label: "跳过" },
+  { value: "blocked", label: "阻塞" },
+  { value: "not_executed", label: "未执行" },
+];
+
+function getLatestResultValue(testCase: TestCaseInfo) {
+  return testCase.latest_test_result?.status ?? "not_tested";
+}
+
+function getLatestResultDisplay(testCase: TestCaseInfo) {
+  const value = getLatestResultValue(testCase);
+  if (value === "not_tested") {
+    return {
+      label: "未测试",
+      className: "border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground",
+    };
+  }
+
+  return {
+    label: latestResultLabels[value as TestResultStatus] ?? value,
+    className: latestResultBadgeStyles[value as TestResultStatus] ?? "border-muted bg-muted/40 text-muted-foreground",
+  };
+}
+
 export function TestCaseList({
+  projectId,
   testCases,
   loading,
   selectedIds,
@@ -130,7 +179,9 @@ export function TestCaseList({
   onDeleteTestCase,
   onBulkDelete,
   onViewTestCase,
+  onLatestResultChange,
   onQuickCreateTestCase,
+  onImport,
   onAIGenerate,
   onAIGenerateFromDocument,
   onOpenAIChat,
@@ -149,6 +200,47 @@ export function TestCaseList({
   const [filters, setFilters] = React.useState<TestCaseFilters>({ search: "" });
   const [showQuickCreate, setShowQuickCreate] = React.useState(false);
   const [showFilterBar, setShowFilterBar] = React.useState(false);
+  const [updatingResultIds, setUpdatingResultIds] = React.useState<Set<string>>(new Set());
+
+  const handleLatestResultChange = React.useCallback(
+    async (testCase: TestCaseInfo, value: string) => {
+      if (!projectId) {
+        toast.error("缺少项目 ID，无法更新测试结果");
+        return;
+      }
+
+      const currentValue = getLatestResultValue(testCase);
+      if (value === currentValue) return;
+
+      const status =
+        value === "not_tested" ? null : (value as TestResultStatus);
+
+      setUpdatingResultIds((prev) => new Set(prev).add(testCase.id));
+      try {
+        const res = await updateLatestTestResult(
+          projectId,
+          testCase.identifier,
+          status
+        );
+        if (res.success && res.data) {
+          setLocalTestCases((prev) =>
+            prev.map((tc) => (tc.id === testCase.id ? res.data : tc))
+          );
+          onLatestResultChange?.(res.data);
+        }
+      } catch (error) {
+        console.error("Failed to update latest test result:", error);
+        toast.error("更新测试结果失败");
+      } finally {
+        setUpdatingResultIds((prev) => {
+          const next = new Set(prev);
+          next.delete(testCase.id);
+          return next;
+        });
+      }
+    },
+    [projectId, onLatestResultChange]
+  );
 
   // 优先级标签
   const priorityLabels: Record<Priority, string> = {
@@ -299,7 +391,15 @@ export function TestCaseList({
     selectedIds.size > 0 && selectedIds.size < localTestCases.length;
 
   // 使用 React.memo 优化可拖动的测试用例行组件
-  const DraggableTestCaseRow = React.memo(({ testCase }: { testCase: TestCaseInfo }) => {
+  const DraggableTestCaseRow = React.memo(({
+    testCase,
+    isUpdatingResult,
+  }: {
+    testCase: TestCaseInfo;
+    isUpdatingResult: boolean;
+  }) => {
+    const latestResult = getLatestResultDisplay(testCase);
+    const latestResultValue = getLatestResultValue(testCase);
     const {
       attributes,
       listeners,
@@ -364,6 +464,30 @@ export function TestCaseList({
           >
             {priorityLabels[testCase.priority]}
           </Badge>
+        </td>
+        <td className="p-3 overflow-hidden">
+          <Select
+            value={latestResultValue}
+            onValueChange={(value) => handleLatestResultChange(testCase, value)}
+            disabled={isUpdatingResult || !projectId}
+          >
+            <SelectTrigger
+              className={cn(
+                "h-7 w-[108px] border px-2 text-xs font-normal shadow-none",
+                latestResult.className
+              )}
+              onClick={(event) => event.stopPropagation()}
+            >
+              <SelectValue placeholder="未测试" />
+            </SelectTrigger>
+            <SelectContent>
+              {latestResultOptions.map((option) => (
+                <SelectItem key={option.value} value={option.value}>
+                  {option.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </td>
         <td className="p-3 overflow-hidden">
           <Badge
@@ -502,6 +626,12 @@ export function TestCaseList({
             <Plus className="mr-2 h-4 w-4" />
             新建用例
           </Button>
+          {onImport && (
+            <Button variant="outline" size="sm" onClick={onImport}>
+              <Download className="mr-2 h-4 w-4" />
+              导入
+            </Button>
+          )}
           {onOpenAIChat && !aiChatOpen && (
             <Button
               size="sm"
@@ -743,10 +873,12 @@ export function TestCaseList({
                   从文档生成
                 </Button>
               )}
-              <Button variant="outline" onClick={() => toast.info("导入测试用例功能开发中")}>
-                <Download className="mr-2 h-4 w-4" />
-                导入测试用例
-              </Button>
+              {onImport && (
+                <Button variant="outline" onClick={onImport}>
+                  <Download className="mr-2 h-4 w-4" />
+                  导入测试用例
+                </Button>
+              )}
             </div>
           </div>
         ) : (
@@ -769,6 +901,7 @@ export function TestCaseList({
                   <th className="w-28 p-3">ID</th>
                   <th className="p-3">TITLE</th>
                   <th className="w-28 p-3">PRIORITY</th>
+                  <th className="w-28 p-3">最近测试结果</th>
                   <th className="w-28 p-3">STATUS</th>
                   <th className="w-36 p-3">OWNER</th>
                   <th className="w-44 p-3">TAGS</th>
@@ -781,7 +914,11 @@ export function TestCaseList({
               >
                 <tbody>
                   {localTestCases.map((testCase) => (
-                    <DraggableTestCaseRow key={testCase.id} testCase={testCase} />
+                    <DraggableTestCaseRow
+                      key={testCase.id}
+                      testCase={testCase}
+                      isUpdatingResult={updatingResultIds.has(testCase.id)}
+                    />
                   ))}
                 </tbody>
               </SortableContext>

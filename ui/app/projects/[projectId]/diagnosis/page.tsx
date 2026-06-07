@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { useParams } from "next/navigation";
+import { useParams, useSearchParams } from "next/navigation";
+import { toast } from "sonner";
 import { MainLayout } from "@/components/layout";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,11 +42,13 @@ import { ClientProvider } from "@/providers/ClientProvider";
 import { getDeploymentUrl } from "@/lib/langgraph/config";
 import { Assistant } from "@langchain/langgraph-sdk";
 import { cn } from "@/lib/utils";
+import { useDiagnosisWebSocket } from "@/hooks/useDiagnosisWebSocket";
 import {
   listDiagnosisReports,
   getDiagnosisReport,
   getRuleStats,
   reloadDiagnosisRules,
+  retryDiagnosisReport,
 } from "@/lib/api/diagnosis";
 import type {
   DiagnosisReport,
@@ -53,6 +56,8 @@ import type {
   DiagnosisFinding,
   RuleStats,
   RootCauseCounts,
+  WSDiagnosisCompletedPayload,
+  WSDiagnosisProgressPayload,
 } from "@/types/diagnosis";
 
 // ==================== 常量 ====================
@@ -170,34 +175,58 @@ function RootCauseMiniBar({ counts }: { counts: RootCauseCounts }) {
 function ReportListItem({
   report,
   onSelect,
+  onRetry,
+  retrying,
 }: {
   report: DiagnosisReportListItem;
   onSelect: () => void;
+  onRetry?: () => void;
+  retrying?: boolean;
 }) {
+  const canRetry = report.status === "analyzing" || report.status === "failed";
+
   return (
-    <button
-      onClick={onSelect}
-      className="w-full rounded-lg border bg-card p-4 text-left hover:bg-accent/50 transition-colors"
-    >
-      <div className="flex items-center justify-between mb-2">
-        <div className="flex items-center gap-2">
-          <Activity className="h-4 w-4 text-primary" />
-          <span className="text-sm font-medium">#{report.id.slice(0, 8)}</span>
-          <span className="text-xs text-muted-foreground">Run: {report.run_id.slice(0, 8)}</span>
-          {getStatusBadge(report.status)}
+    <div className="rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+      <button
+        onClick={onSelect}
+        className="w-full p-4 text-left"
+      >
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-2">
+            <Activity className="h-4 w-4 text-primary" />
+            <span className="text-sm font-medium">#{report.id.slice(0, 8)}</span>
+            <span className="text-xs text-muted-foreground">Run: {report.run_id.slice(0, 8)}</span>
+            {getStatusBadge(report.status)}
+          </div>
+          <div className="flex items-center gap-2">
+            {getDegradationBadge(report.degradation_level)}
+            <span className="text-xs text-muted-foreground">{formatTime(report.created_at)}</span>
+          </div>
         </div>
-        <div className="flex items-center gap-2">
-          {getDegradationBadge(report.degradation_level)}
-          <span className="text-xs text-muted-foreground">{formatTime(report.created_at)}</span>
+        <div className="flex items-center justify-between">
+          <RootCauseMiniBar counts={report.summary.root_cause_counts} />
+          <span className="text-xs text-muted-foreground">
+            来源: {report.source_type}
+          </span>
         </div>
-      </div>
-      <div className="flex items-center justify-between">
-        <RootCauseMiniBar counts={report.summary.root_cause_counts} />
-        <span className="text-xs text-muted-foreground">
-          来源: {report.source_type}
-        </span>
-      </div>
-    </button>
+      </button>
+      {canRetry && onRetry && (
+        <div className="border-t px-4 py-2 flex justify-end">
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={retrying}
+            onClick={(e) => {
+              e.stopPropagation();
+              onRetry();
+            }}
+          >
+            <RefreshCw className={cn("mr-2 h-3 w-3", retrying && "animate-spin")} />
+            重新诊断
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -241,6 +270,13 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
 
       {expanded && (
         <div className="border-t px-4 py-3 space-y-3">
+          {finding.root_cause_detail && (
+            <div className="rounded-md bg-muted/50 p-2 text-xs">
+              <span className="text-muted-foreground">根因详情: </span>
+              {finding.root_cause_detail}
+            </div>
+          )}
+
           <div className="grid grid-cols-2 gap-3 text-sm">
             <div>
               <span className="text-muted-foreground">错误信息: </span>
@@ -259,6 +295,17 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
               <span className="text-xs">{finding.llm_cache_hit ? "命中" : "未命中"}</span>
             </div>
           </div>
+
+          {finding.affects_apis.length > 0 && (
+            <div>
+              <p className="text-xs font-medium text-muted-foreground mb-1">影响 API:</p>
+              <ul className="list-disc list-inside text-xs space-y-1">
+                {finding.affects_apis.map((api, i) => (
+                  <li key={i} className="font-mono">{api}</li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* 代码位置 */}
           {finding.code_locations.length > 0 && (
@@ -301,9 +348,15 @@ function FindingRow({ finding }: { finding: DiagnosisFinding }) {
 function ReportDetailView({
   report,
   onBack,
+  onRetry,
+  retrying,
+  progress,
 }: {
   report: DiagnosisReport;
   onBack: () => void;
+  onRetry?: () => void;
+  retrying?: boolean;
+  progress?: WSDiagnosisProgressPayload | null;
 }) {
   const [filterRootCause, setFilterRootCause] = React.useState<string | null>(null);
 
@@ -346,8 +399,24 @@ function ReportDetailView({
                   : "severe"
                 : "none"
             )}
+            {(report.status === "analyzing" || report.status === "failed") && onRetry && (
+              <Button variant="outline" size="sm" disabled={retrying} onClick={onRetry}>
+                <RefreshCw className={cn("mr-2 h-3 w-3", retrying && "animate-spin")} />
+                重新诊断
+              </Button>
+            )}
           </div>
         </div>
+
+        {report.status === "analyzing" && progress?.report_id === report.report_id && (
+          <div className="mb-3 space-y-1">
+            <div className="flex items-center justify-between text-xs text-muted-foreground">
+              <span>{progress.message || progress.phase}</span>
+              {progress.progress != null && <span>{Math.round(progress.progress)}%</span>}
+            </div>
+            <Progress value={progress.progress ?? undefined} className="h-2" />
+          </div>
+        )}
 
         {/* 降级状态 */}
         <div className="grid grid-cols-4 gap-2 mb-3">
@@ -559,6 +628,7 @@ function RuleStatsDialog({
 // ==================== 主页面 ====================
 export default function DiagnosisPage() {
   const params = useParams();
+  const searchParams = useSearchParams();
   const projectId = params.projectId as string;
 
   const [reports, setReports] = React.useState<DiagnosisReportListItem[]>([]);
@@ -567,10 +637,17 @@ export default function DiagnosisPage() {
   const [loadingReport, setLoadingReport] = React.useState(false);
   const [page, setPage] = React.useState(1);
   const [total, setTotal] = React.useState(0);
+  const [statusFilter, setStatusFilter] = React.useState<string>("all");
   const [statsOpen, setStatsOpen] = React.useState(false);
   const [assistant, setAssistant] = React.useState<Assistant | null>(null);
   const [aiChatOpen, setAiChatOpen] = React.useState(false);
+  const [retryingReportId, setRetryingReportId] = React.useState<string | null>(null);
+  const [diagnosisProgress, setDiagnosisProgress] = React.useState<WSDiagnosisProgressPayload | null>(null);
   const pageSize = 20;
+
+  const urlReportId = searchParams.get("reportId");
+  const selectedReportIdRef = React.useRef<string | null>(null);
+  selectedReportIdRef.current = selectedReport?.report_id ?? null;
 
   // 初始化 LangGraph Assistant（优先连接日志分析 Agent）
   React.useEffect(() => {
@@ -578,7 +655,11 @@ export default function DiagnosisPage() {
     const initAssistant = async () => {
       try {
         const { Client } = await import("@langchain/langgraph-sdk");
-        const client = new Client({ apiUrl: getDeploymentUrl() });
+        const { getAuthHeaders } = await import("@/lib/auth");
+        const client = new Client({
+          apiUrl: getDeploymentUrl(),
+          defaultHeaders: getAuthHeaders(),
+        });
         const assistants = await client.assistants.search();
         // 优先使用日志分析 Agent，fallback 到第一个
         const logAgent = assistants.find(
@@ -598,7 +679,11 @@ export default function DiagnosisPage() {
     if (!projectId) return;
     setLoading(true);
     try {
-      const res = await listDiagnosisReports(projectId, { page, page_size: pageSize });
+      const res = await listDiagnosisReports(projectId, {
+        page,
+        page_size: pageSize,
+        ...(statusFilter !== "all" ? { status: statusFilter } : {}),
+      });
       if (res.success) {
         setReports(res.data.items);
         setTotal(res.data.total);
@@ -608,13 +693,9 @@ export default function DiagnosisPage() {
     } finally {
       setLoading(false);
     }
-  }, [projectId, page]);
+  }, [projectId, page, statusFilter]);
 
-  React.useEffect(() => {
-    loadReports();
-  }, [loadReports]);
-
-  const handleSelectReport = async (reportId: string) => {
+  const handleSelectReport = React.useCallback(async (reportId: string) => {
     setLoadingReport(true);
     try {
       const res = await getDiagnosisReport(projectId, reportId);
@@ -625,14 +706,77 @@ export default function DiagnosisPage() {
       console.error("加载诊断详情失败:", e);
     }
     setLoadingReport(false);
-  };
+  }, [projectId]);
+
+  const handleRetryReport = React.useCallback(async (reportId: string) => {
+    setRetryingReportId(reportId);
+    try {
+      const res = await retryDiagnosisReport(projectId, reportId);
+      if (res.success) {
+        toast.success("已触发重新诊断");
+        await loadReports();
+        if (selectedReportIdRef.current === reportId) {
+          await handleSelectReport(reportId);
+        }
+      }
+    } catch (e) {
+      console.error("重新诊断失败:", e);
+      toast.error("重新诊断失败");
+    } finally {
+      setRetryingReportId(null);
+    }
+  }, [projectId, loadReports, handleSelectReport]);
+
+  const handleDiagnosisCompleted = React.useCallback(
+    (payload: WSDiagnosisCompletedPayload) => {
+      loadReports();
+      const viewingId = selectedReportIdRef.current;
+      const urlId = urlReportId;
+      if (
+        payload.report_id === viewingId ||
+        payload.report_id === urlId
+      ) {
+        handleSelectReport(payload.report_id);
+      }
+      if (diagnosisProgress?.report_id === payload.report_id) {
+        setDiagnosisProgress(null);
+      }
+    },
+    [loadReports, handleSelectReport, urlReportId, diagnosisProgress?.report_id]
+  );
+
+  const handleDiagnosisProgress = React.useCallback(
+    (payload: WSDiagnosisProgressPayload) => {
+      setDiagnosisProgress(payload);
+    },
+    []
+  );
+
+  useDiagnosisWebSocket({
+    projectId,
+    onDiagnosisCompleted: handleDiagnosisCompleted,
+    onDiagnosisProgress: handleDiagnosisProgress,
+    enabled: !!projectId,
+  });
+
+  React.useEffect(() => {
+    loadReports();
+  }, [loadReports]);
+
+  React.useEffect(() => {
+    if (urlReportId) {
+      handleSelectReport(urlReportId);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [urlReportId]);
 
   const handleReloadRules = async () => {
     try {
       await reloadDiagnosisRules(projectId);
-      // 可以 toast 提示成功
+      toast.success("规则库刷新成功");
     } catch (e) {
       console.error("刷新规则失败:", e);
+      toast.error("规则库刷新失败");
     }
   };
 
@@ -645,6 +789,9 @@ export default function DiagnosisPage() {
             <ReportDetailView
               report={selectedReport}
               onBack={() => setSelectedReport(null)}
+              onRetry={() => handleRetryReport(selectedReport.report_id)}
+              retrying={retryingReportId === selectedReport.report_id}
+              progress={diagnosisProgress}
             />
           </div>
           {assistant && (
@@ -708,10 +855,29 @@ export default function DiagnosisPage() {
 
         {/* 报告列表 */}
         <div>
-          <h2 className="text-sm font-medium mb-2">
-            诊断报告
-            <span className="text-muted-foreground ml-1">({total})</span>
-          </h2>
+          <div className="flex items-center justify-between mb-2">
+            <h2 className="text-sm font-medium">
+              诊断报告
+              <span className="text-muted-foreground ml-1">({total})</span>
+            </h2>
+            <Select
+              value={statusFilter}
+              onValueChange={(v) => {
+                setStatusFilter(v);
+                setPage(1);
+              }}
+            >
+              <SelectTrigger className="w-32 h-8 text-xs">
+                <SelectValue placeholder="状态筛选" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">全部状态</SelectItem>
+                <SelectItem value="completed">已完成</SelectItem>
+                <SelectItem value="analyzing">分析中</SelectItem>
+                <SelectItem value="failed">失败</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
           {loading ? (
             <div className="text-center py-8 text-sm text-muted-foreground">加载中...</div>
           ) : reports.length === 0 ? (
@@ -725,11 +891,26 @@ export default function DiagnosisPage() {
           ) : (
             <div className="space-y-2">
               {reports.map((report) => (
-                <ReportListItem
-                  key={report.id}
-                  report={report}
-                  onSelect={() => handleSelectReport(report.id)}
-                />
+                <React.Fragment key={report.id}>
+                  <ReportListItem
+                    report={report}
+                    onSelect={() => handleSelectReport(report.id)}
+                    onRetry={() => handleRetryReport(report.id)}
+                    retrying={retryingReportId === report.id}
+                  />
+                  {report.status === "analyzing" &&
+                    diagnosisProgress?.report_id === report.id && (
+                      <div className="rounded-lg border bg-card px-4 py-2 space-y-1 -mt-1">
+                        <div className="flex items-center justify-between text-xs text-muted-foreground">
+                          <span>{diagnosisProgress.message || diagnosisProgress.phase}</span>
+                          {diagnosisProgress.progress != null && (
+                            <span>{Math.round(diagnosisProgress.progress)}%</span>
+                          )}
+                        </div>
+                        <Progress value={diagnosisProgress.progress ?? undefined} className="h-1.5" />
+                      </div>
+                    )}
+                </React.Fragment>
               ))}
             </div>
           )}

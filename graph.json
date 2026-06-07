@@ -17,6 +17,9 @@
   },
   "_deployId": "id_MS81OmFIVnBZMlhwbVlqbHJvL3BuYWs2TkZvMlNnPT06NDg4ODM1ZmE=",
   "env": ".env",
+  "auth": {
+    "path": "src/security/auth.py:auth"
+  },
   "_releaseId": "id_Mi81OmFIVnBZMlhwbVlqbHJvL3BuYWs2TkZvMlNnPT06NDg4ODM1ZmE=",
   "image_distro": "wolfi",
   "_versionId": "id_My81OmFIVnBZMlhwbVlqbHJvL3BuYWs2TkZvMlNnPT06NDg4ODM1ZmE=",

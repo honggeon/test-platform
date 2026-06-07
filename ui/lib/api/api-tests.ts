@@ -231,6 +231,38 @@ export async function deleteAPITest(
 }
 
 /**
+ * 批量删除 API 测试
+ */
+export async function bulkDeleteAPITests(
+  projectIdentifier: string,
+  apiTestIds: string[]
+): Promise<{ deleted_count: number; failed_ids: string[] }> {
+  const response = await apiClient.post<{
+    data: { deleted_count: number; failed_ids: string[] };
+  }>(`/projects/${projectIdentifier}/api-tests/bulk-delete`, {
+    api_test_ids: apiTestIds,
+  });
+  return response.data;
+}
+
+/**
+ * 批量执行 API 测试
+ */
+export async function bulkRunAPITests(
+  projectIdentifier: string,
+  apiTestIds: string[],
+  executionConfig?: Record<string, unknown>
+): Promise<{ run_ids: string[]; failed_ids: string[]; total: number }> {
+  const response = await apiClient.post<{
+    data: { run_ids: string[]; failed_ids: string[]; total: number };
+  }>(`/projects/${projectIdentifier}/api-tests/bulk-run`, {
+    api_test_ids: apiTestIds,
+    execution_config: executionConfig,
+  });
+  return response.data;
+}
+
+/**
  * 获取测试脚本
  */
 export async function getTestScript(

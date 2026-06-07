@@ -15,6 +15,7 @@ import type {
   PaginationInfo,
   Priority,
   TestCaseState,
+  TestResultStatus,
 } from "./types";
 
 interface TestCaseResponse {
@@ -73,6 +74,18 @@ export function getFolderTestCases(
 export function getTestCase(projectId: string, testCaseId: string) {
   return apiClient.get<TestCaseResponse>(
     `/projects/${projectId}/test-cases/${testCaseId}`
+  );
+}
+
+// 更新测试用例最近一次测试结果
+export function updateLatestTestResult(
+  projectId: string,
+  testCaseId: string,
+  status: TestResultStatus | null
+) {
+  return apiClient.patch<{ success: boolean; data: TestCaseInfo }>(
+    `/projects/${projectId}/test-cases/${testCaseId}/latest-test-result`,
+    { status }
   );
 }
 
@@ -150,5 +163,77 @@ export function bulkUpdateTestCases(
     test_case_ids: testCaseIds,
     update_data: updateData,
   });
+}
+
+export interface TestCaseImportError {
+  row: number;
+  name?: string;
+  message: string;
+}
+
+export interface TestCaseImportResponse {
+  success: boolean;
+  message: string;
+  imported_count: number;
+  failed_count: number;
+  errors: TestCaseImportError[];
+  test_cases?: TestCaseInfo[];
+}
+
+export async function importTestCases(
+  projectId: string,
+  file: File,
+  folderId?: string | null
+): Promise<TestCaseImportResponse> {
+  const formData = new FormData();
+  formData.append("file", file);
+  if (folderId) {
+    formData.append("folder_id", folderId);
+  }
+
+  const response = await fetch(
+    `/api/v2/projects/${projectId}/test-cases/import`,
+    {
+      method: "POST",
+      body: formData,
+    }
+  );
+
+  const data = await response.json();
+  if (!response.ok) {
+    const detail = data?.detail;
+    const message =
+      data?.message ||
+      (typeof detail === "string"
+        ? detail
+        : Array.isArray(detail)
+          ? detail.map((item: { msg?: string }) => item.msg).filter(Boolean).join("; ")
+          : "导入失败");
+    throw new Error(message);
+  }
+  return data as TestCaseImportResponse;
+}
+
+export function downloadTestCaseImportTemplate(projectId: string): void {
+  const link = document.createElement("a");
+  link.href = `/api/v2/projects/${projectId}/test-cases/import-template`;
+  link.download = "test-cases-import-template.csv";
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}
+
+export async function importTestCasesFromApi(
+  projectId: string,
+  endpointIds: string[],
+  folderId?: string | null
+): Promise<TestCaseImportResponse> {
+  return apiClient.post<TestCaseImportResponse>(
+    `/projects/${projectId}/test-cases/import-from-api`,
+    {
+      endpoint_ids: endpointIds,
+      folder_id: folderId || undefined,
+    }
+  );
 }
 

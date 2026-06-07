@@ -27,7 +27,7 @@ import {
 } from "lucide-react";
 import { MainLayout } from "@/components/layout";
 import { useLanguage } from "@/providers/LanguageProvider";
-import { APITestList, APITestDialog } from "@/components/api-tests";
+import { APITestList, APITestDialog, AIGenerateAPITestDialog } from "@/components/api-tests";
 import { APIEndpointSidebar } from "@/components/api-tests/api-endpoint-sidebar";
 import { APIParseDialog } from "@/components/api-tests/api-parse-dialog";
 import { APIEndpointList } from "@/components/api-tests/APIEndpointList";
@@ -59,16 +59,20 @@ import { ClientProvider } from "@/providers/ClientProvider";
 import { Assistant } from "@langchain/langgraph-sdk";
 import { ChevronLeft } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { getDeploymentUrl } from "@/lib/langgraph/config";
+
 import {
   getFolderAPITests,
   createAPITest,
   updateAPITest,
   deleteAPITest,
   runAPITest,
+  bulkDeleteAPITests,
+  bulkRunAPITests,
 } from "@/lib/api/api-tests";
 import {
   listAPIEndpoints,
+  deleteAPIEndpoint,
+  bulkDeleteAPIEndpoints,
   type APIEndpoint,
 } from "@/lib/api/api-endpoints";
 import {
@@ -85,6 +89,7 @@ import type { APITest, CreateAPITestRequest } from "@/lib/api/api-tests";
 import type { Scenario } from "@/types/scenario";
 
 type TestMode = "endpoint" | "scenario";
+type EndpointViewMode = "endpoints" | "apiTests";
 type ScenarioViewMode = "orchestrate" | "monitor";
 
 export default function APITestsPage() {
@@ -97,6 +102,7 @@ export default function APITestsPage() {
 
   // 模式切换状态
   const [testMode, setTestMode] = React.useState<TestMode>("endpoint");
+  const [endpointViewMode, setEndpointViewMode] = React.useState<EndpointViewMode>("endpoints");
 
   // 接口测试相关状态
   const [apiTests, setApiTests] = React.useState<APITest[]>([]);
@@ -105,6 +111,7 @@ export default function APITestsPage() {
   const [actualTestCasesCounts, setActualTestCasesCounts] = React.useState<Record<string, number>>({});
   const [selectedFolderId, setSelectedFolderId] = React.useState<string | null>(null);
   const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
+  const [selectedAPITestIds, setSelectedAPITestIds] = React.useState<Set<string>>(new Set());
   const [selectedEndpointId, setSelectedEndpointId] = React.useState<string | null>(null);
   const [showEndpointSidebar, setShowEndpointSidebar] = React.useState(false);
   const [artifactsRefreshTrigger, setArtifactsRefreshTrigger] = React.useState(0);
@@ -145,6 +152,8 @@ export default function APITestsPage() {
   const [apiParseDialogOpen, setApiParseDialogOpen] = React.useState(false);
   const [aiGenerateScenarioDialogOpen, setAiGenerateScenarioDialogOpen] = React.useState(false);
   const [createEndpointDialogOpen, setCreateEndpointDialogOpen] = React.useState(false);
+  const [bulkDeleteEndpointsDialogOpen, setBulkDeleteEndpointsDialogOpen] = React.useState(false);
+  const [bulkDeletingEndpointIds, setBulkDeletingEndpointIds] = React.useState<string[]>([]);
 
   // AI 聊天状态
   const [aiChatOpen, setAiChatOpen] = React.useState(false);
@@ -262,7 +271,14 @@ export default function APITestsPage() {
     setSelectedFolderName(folder?.name);
     setPage(1);
     setSelectedIds(new Set());
+    setSelectedAPITestIds(new Set());
   };
+
+  // 切换视图时清空选择状态
+  React.useEffect(() => {
+    setSelectedIds(new Set());
+    setSelectedAPITestIds(new Set());
+  }, [endpointViewMode]);
 
   // 处理创建接口
   const handleCreateAPIEndpoint = (folderId?: string | null) => {
@@ -522,6 +538,26 @@ export default function APITestsPage() {
               <div className="flex items-center gap-2">
                 {testMode === "endpoint" ? (
                   <>
+                    <div className="flex bg-muted p-1 rounded-lg">
+                      <Button
+                        variant={endpointViewMode === "endpoints" ? "default" : "ghost"}
+                        size="sm"
+                        className="h-8 px-3"
+                        onClick={() => setEndpointViewMode("endpoints")}
+                      >
+                        <FileCode className="h-4 w-4 mr-1" />
+                        接口
+                      </Button>
+                      <Button
+                        variant={endpointViewMode === "apiTests" ? "default" : "ghost"}
+                        size="sm"
+                        className="h-8 px-3"
+                        onClick={() => setEndpointViewMode("apiTests")}
+                      >
+                        <Zap className="h-4 w-4 mr-1" />
+                        测试脚本
+                      </Button>
+                    </div>
                     <Button
                       variant="outline"
                       size="sm"
@@ -598,67 +634,154 @@ export default function APITestsPage() {
             {/* 模式内容区域 */}
             <div className="flex-1 overflow-hidden relative flex flex-col">
               {testMode === "endpoint" ? (
-                <>
-                  {/* 接口列表 - 上半部分 */}
-                  <div className="max-h-[300px] overflow-y-auto border-b">
-                    <APIEndpointList
-                      endpoints={apiEndpoints}
-                      loading={loading}
-                      selectedEndpointId={selectedEndpointId}
-                      actualTestCasesCounts={actualTestCasesCounts}
-                      onSelectEndpoint={(endpointId) => {
-                        setSelectedEndpointId(endpointId);
-                        setShowEndpointSidebar(true);
-                      }}
-                      onSearch={() => {}}
-                      folderName={selectedFolderName}
-                    />
-                  </div>
-
-                  {/* 测试成果物 - 下半部分 */}
-                  <div className="flex-1 min-h-0 overflow-y-auto bg-gradient-to-b from-muted/20 to-background p-6">
-                    <div className="max-w-7xl mx-auto">
-                      <div className="flex items-center justify-between mb-6">
-                        <div>
-                          <h2 className="text-xl font-bold flex items-center gap-2">
-                            <Zap className="h-5 w-5 text-purple-500" />
-                            {t("apiTests.testArtifacts")}
-                          </h2>
-                          <p className="text-sm text-muted-foreground mt-1">
-                            {selectedEndpointId
-                              ? t("apiTests.testArtifactsDesc")
-                              : apiEndpoints.length > 0
-                              ? t("apiTests.testArtifactsForEndpoint", { name: apiEndpoints[0].display_name })
-                              : t("apiTests.noEndpointData")
-                            }
-                          </p>
-                        </div>
-                      </div>
-
-                      {apiEndpoints.length === 0 && (
-                        <div className="text-center py-12 border-2 border-dashed rounded-lg bg-muted/10">
-                          <FileCode className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
-                          <p className="text-lg font-medium mb-2">{t("apiTests.noEndpointData")}</p>
-                          <p className="text-sm text-muted-foreground mb-4">
-                            {t("apiTests.selectFolderOrImportAPI")}
-                          </p>
-                        </div>
-                      )}
-
-                      {apiEndpoints.length > 0 && (
-                        <EnhancedTestArtifactsPanel
-                          key={`artifacts-${selectedEndpointId || apiEndpoints[0]?.id}`}
-                          endpointId={selectedEndpointId || apiEndpoints[0]?.id}
-                          projectId={projectId}
-                          onRefresh={loadAPITests}
-                          onTestCasesCountChange={handleTestCasesCountChange}
-                          onExecuteScript={handleExecuteScript}
-                          refreshTrigger={artifactsRefreshTrigger}
-                        />
-                      )}
+                endpointViewMode === "apiTests" ? (
+                  <APITestList
+                    apiTests={apiTests}
+                    loading={loading}
+                    selectedIds={selectedAPITestIds}
+                    onSelectIds={setSelectedAPITestIds}
+                    onSearch={(query) => {
+                      setSearchQuery(query);
+                      setPage(1);
+                      loadAPITests();
+                    }}
+                    onFilterFormat={(format) => {
+                      setFormatFilter(format);
+                      setPage(1);
+                      loadAPITests();
+                    }}
+                    onCreateAPITest={() => setApiTestDialogOpen(true)}
+                    onEditAPITest={(apiTest) => {
+                      setEditingAPITest(apiTest);
+                      setApiTestDialogOpen(true);
+                    }}
+                    onDeleteAPITest={(apiTest) => {
+                      setDeletingAPITest(apiTest);
+                      setDeleteDialogOpen(true);
+                    }}
+                    onBulkDelete={async () => {
+                      if (selectedAPITestIds.size === 0) return;
+                      try {
+                        await bulkDeleteAPITests(projectId, Array.from(selectedAPITestIds));
+                        toast.success(`已删除 ${selectedAPITestIds.size} 个API测试`);
+                        setSelectedAPITestIds(new Set());
+                        loadAPITests();
+                      } catch (error) {
+                        console.error("Failed to bulk delete api tests:", error);
+                        toast.error("批量删除失败");
+                      }
+                    }}
+                    onBulkRun={async () => {
+                      if (selectedAPITestIds.size === 0) return;
+                      try {
+                        await bulkRunAPITests(projectId, Array.from(selectedAPITestIds));
+                        toast.success(`已启动 ${selectedAPITestIds.size} 个API测试的执行`);
+                        setSelectedAPITestIds(new Set());
+                      } catch (error) {
+                        console.error("Failed to bulk run api tests:", error);
+                        toast.error("批量执行失败");
+                      }
+                    }}
+                    onViewAPITest={(apiTest) => {
+                      // TODO: 查看API测试详情
+                      toast.info(`查看API测试: ${apiTest.name}`);
+                    }}
+                    onRunAPITest={async (apiTest) => {
+                      try {
+                        await runAPITest(projectId, apiTest.id);
+                        toast.success(`已启动API测试: ${apiTest.name}`);
+                      } catch (error) {
+                        console.error("Failed to run api test:", error);
+                        toast.error("执行失败");
+                      }
+                    }}
+                    onAIGenerate={() => setAiGenerateDialogOpen(true)}
+                    onAPIParse={() => setApiParseDialogOpen(true)}
+                    pagination={{
+                      page,
+                      pageSize,
+                      total,
+                      onPageChange: setPage,
+                    }}
+                  />
+                ) : (
+                  <>
+                    {/* 接口列表 - 上半部分 */}
+                    <div className="max-h-[300px] overflow-y-auto border-b">
+                      <APIEndpointList
+                        endpoints={apiEndpoints}
+                        loading={loading}
+                        selectedEndpointId={selectedEndpointId}
+                        actualTestCasesCounts={actualTestCasesCounts}
+                        onSelectEndpoint={(endpointId) => {
+                          setSelectedEndpointId(endpointId);
+                          setShowEndpointSidebar(true);
+                        }}
+                        onSearch={() => {}}
+                        onDeleteEndpoint={async (endpoint) => {
+                          try {
+                            await deleteAPIEndpoint(endpoint.id);
+                            toast.success(t("apiTests.endpointDeleted"));
+                            loadAPITests();
+                            folderTreeRef.current?.refresh();
+                          } catch (error) {
+                            console.error("Failed to delete endpoint:", error);
+                            toast.error(t("apiTests.endpointDeleteFailed"));
+                          }
+                        }}
+                        onBulkDelete={async (endpointIds) => {
+                          setBulkDeletingEndpointIds(endpointIds);
+                          setBulkDeleteEndpointsDialogOpen(true);
+                        }}
+                        folderName={selectedFolderName}
+                      />
                     </div>
-                  </div>
-                </>
+
+                    {/* 测试成果物 - 下半部分 */}
+                    <div className="flex-1 min-h-0 overflow-y-auto bg-gradient-to-b from-muted/20 to-background p-6">
+                      <div className="max-w-7xl mx-auto">
+                        <div className="flex items-center justify-between mb-6">
+                          <div>
+                            <h2 className="text-xl font-bold flex items-center gap-2">
+                              <Zap className="h-5 w-5 text-purple-500" />
+                              {t("apiTests.testArtifacts")}
+                            </h2>
+                            <p className="text-sm text-muted-foreground mt-1">
+                              {selectedEndpointId
+                                ? t("apiTests.testArtifactsDesc")
+                                : apiEndpoints.length > 0
+                                ? t("apiTests.testArtifactsForEndpoint", { name: apiEndpoints[0].display_name })
+                                : t("apiTests.noEndpointData")
+                              }
+                            </p>
+                          </div>
+                        </div>
+
+                        {apiEndpoints.length === 0 && (
+                          <div className="text-center py-12 border-2 border-dashed rounded-lg bg-muted/10">
+                            <FileCode className="h-16 w-16 text-muted-foreground mx-auto mb-4" />
+                            <p className="text-lg font-medium mb-2">{t("apiTests.noEndpointData")}</p>
+                            <p className="text-sm text-muted-foreground mb-4">
+                              {t("apiTests.selectFolderOrImportAPI")}
+                            </p>
+                          </div>
+                        )}
+
+                        {apiEndpoints.length > 0 && (
+                          <EnhancedTestArtifactsPanel
+                            key={`artifacts-${selectedEndpointId || apiEndpoints[0]?.id}`}
+                            endpointId={selectedEndpointId || apiEndpoints[0]?.id}
+                            projectId={projectId}
+                            onRefresh={loadAPITests}
+                            onTestCasesCountChange={handleTestCasesCountChange}
+                            onExecuteScript={handleExecuteScript}
+                            refreshTrigger={artifactsRefreshTrigger}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  </>
+                )
               ) : (
                 <>
                   {/* Scenario test mode */}
@@ -694,7 +817,6 @@ export default function APITestsPage() {
               )}
             >
               <ClientProvider
-                deploymentUrl={getDeploymentUrl()}
                 apiKey={process.env.NEXT_PUBLIC_LANGSMITH_API_KEY || ""}
               >
                 <AIChatContainer
@@ -783,15 +905,103 @@ export default function APITestsPage() {
       </div>
 
       {/* 各种对话框 */}
+        {/* API测试对话框 */}
+        <APITestDialog
+          open={apiTestDialogOpen}
+          onOpenChange={setApiTestDialogOpen}
+          apiTest={editingAPITest}
+          onSubmit={async (data) => {
+            try {
+              setSubmitting(true);
+              if (editingAPITest) {
+                await updateAPITest(projectId, editingAPITest.id, data);
+                toast.success("API测试更新成功");
+              } else {
+                await createAPITest(projectId, data);
+                toast.success("API测试创建成功");
+              }
+              setApiTestDialogOpen(false);
+              setEditingAPITest(null);
+              loadAPITests();
+            } catch (error) {
+              console.error("Failed to save API test:", error);
+              toast.error("保存失败");
+            } finally {
+              setSubmitting(false);
+            }
+          }}
+          submitting={submitting}
+          projectId={projectId}
+        />
+
+        {/* 删除API测试确认对话框 */}
+        <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认删除</DialogTitle>
+              <DialogDescription>
+                确定要删除 API 测试 "{deletingAPITest?.name}" 吗？此操作不可恢复。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDeleteDialogOpen(false);
+                  setDeletingAPITest(null);
+                }}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  if (!deletingAPITest) return;
+                  try {
+                    await deleteAPITest(projectId, deletingAPITest.id);
+                    toast.success("API测试删除成功");
+                    setDeleteDialogOpen(false);
+                    setDeletingAPITest(null);
+                    loadAPITests();
+                  } catch (error) {
+                    console.error("Failed to delete API test:", error);
+                    toast.error("删除失败");
+                  }
+                }}
+              >
+                {t("common.delete")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
         {/* API解析对话框 */}
         <APIParseDialog
           open={apiParseDialogOpen}
           onOpenChange={setApiParseDialogOpen}
           projectIdentifier={projectId}
+          parentFolderId={selectedFolderId}
           onSuccess={() => {
             toast.success(t("apiTests.apiDocParseSuccess"));
             loadAPITests();
             folderTreeRef.current?.refresh();
+          }}
+        />
+
+        {/* AI生成API测试对话框 */}
+        <AIGenerateAPITestDialog
+          open={aiGenerateDialogOpen}
+          onOpenChange={setAiGenerateDialogOpen}
+          projectIdentifier={projectId}
+          parentFolderId={selectedFolderId}
+          onSuccess={() => {
+            loadAPITests();
+            folderTreeRef.current?.refresh();
+          }}
+          onOpenChat={(prompt) => {
+            setAiChatInitialPrompt(prompt);
+            setAiChatKey(prev => prev + 1);
+            setAiChatOpen(true);
           }}
         />
 
@@ -869,6 +1079,48 @@ export default function APITestsPage() {
               </Button>
               <Button onClick={handleSubmitFolder} disabled={submitting}>
                 {submitting ? t("common.saving") : editingFolder ? t("common.save") : t("common.create")}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* 批量删除接口确认对话框 */}
+        <Dialog open={bulkDeleteEndpointsDialogOpen} onOpenChange={setBulkDeleteEndpointsDialogOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>确认批量删除接口</DialogTitle>
+              <DialogDescription>
+                确定要删除选中的 {bulkDeletingEndpointIds.length} 个接口吗？此操作不可恢复，关联的测试脚本也将被删除。
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setBulkDeleteEndpointsDialogOpen(false);
+                  setBulkDeletingEndpointIds([]);
+                }}
+              >
+                {t("common.cancel")}
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={async () => {
+                  if (bulkDeletingEndpointIds.length === 0) return;
+                  try {
+                    await bulkDeleteAPIEndpoints(bulkDeletingEndpointIds);
+                    toast.success(`成功删除 ${bulkDeletingEndpointIds.length} 个接口`);
+                    setBulkDeleteEndpointsDialogOpen(false);
+                    setBulkDeletingEndpointIds([]);
+                    loadAPITests();
+                    folderTreeRef.current?.refresh();
+                  } catch (error) {
+                    console.error("Failed to bulk delete endpoints:", error);
+                    toast.error("批量删除失败");
+                  }
+                }}
+              >
+                {t("common.delete")}
               </Button>
             </DialogFooter>
           </DialogContent>

@@ -48,6 +48,7 @@ interface AIGenerateAPITestDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectIdentifier: string;
+  parentFolderId?: string | null;
   onSuccess?: () => void;
   onOpenChat?: (prompt: string) => void;
 }
@@ -56,6 +57,7 @@ export function AIGenerateAPITestDialog({
   open,
   onOpenChange,
   projectIdentifier,
+  parentFolderId,
   onSuccess,
   onOpenChat,
 }: AIGenerateAPITestDialogProps) {
@@ -129,7 +131,7 @@ ${schemaSource === "url" ? `Schema URL: ${schemaUrl}` : `已上传文件: ${sche
         },
         body: JSON.stringify({
           project_identifier: projectIdentifier,
-          parent_folder_id: null,
+          parent_folder_id: parentFolderId || null,
           file_content: fileContent || { url: schemaUrl },
           create_structure: true
         }),

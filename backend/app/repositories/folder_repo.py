@@ -16,12 +16,13 @@
 from typing import Optional
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.repositories.base import BaseRepository
 from app.models.folder import Folder
+from app.models.folder_type import FolderType
 from app.models.test_case import TestCase
 
 
@@ -228,6 +229,57 @@ class FolderRepository(BaseRepository[Folder]):
             Folder: 移动后的文件夹
         """
         folder.parent_id = new_parent_id
+        await self.session.flush()
+        await self.session.refresh(folder)
+        return folder
+
+    async def get_by_name_and_parent(
+        self,
+        project_id: UUID,
+        name: str,
+        parent_id: Optional[UUID],
+        folder_type: FolderType,
+    ) -> Optional[Folder]:
+        """根据名称、父级和类型查找文件夹"""
+        conditions = [
+            Folder.project_id == project_id,
+            Folder.name == name,
+            Folder.folder_type == folder_type,
+        ]
+        if parent_id is None:
+            conditions.append(Folder.parent_id.is_(None))
+        else:
+            conditions.append(Folder.parent_id == parent_id)
+
+        result = await self.session.execute(select(Folder).where(and_(*conditions)).limit(1))
+        return result.scalar_one_or_none()
+
+    async def get_or_create(
+        self,
+        project_id: UUID,
+        name: str,
+        parent_id: Optional[UUID],
+        folder_type: FolderType,
+        description: Optional[str] = None,
+    ) -> Folder:
+        """获取或创建文件夹（同名同级复用）"""
+        existing = await self.get_by_name_and_parent(
+            project_id=project_id,
+            name=name,
+            parent_id=parent_id,
+            folder_type=folder_type,
+        )
+        if existing:
+            return existing
+
+        folder = Folder(
+            project_id=project_id,
+            parent_id=parent_id,
+            name=name,
+            description=description,
+            folder_type=folder_type,
+        )
+        self.session.add(folder)
         await self.session.flush()
         await self.session.refresh(folder)
         return folder

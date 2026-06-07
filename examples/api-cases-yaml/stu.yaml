@@ -1,0 +1,17 @@
+#- name
+#- age
+
+#name: zhangsan
+#age: 18
+
+#列表嵌套字典
+#- name: zhangsan
+#  age: 18
+
+#字典嵌套列表
+name: zhangsan
+age: 18
+list:
+  - 1
+  - 2
+  - 3

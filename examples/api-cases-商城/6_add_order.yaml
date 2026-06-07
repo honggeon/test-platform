@@ -1,0 +1,36 @@
+基础配置: # 固定的KEY
+  用例类型: ApiCase # WebCase 、 ApiCase 、 AppCase
+  用例标题: 提交订单-购物车
+  一级模块: 提交订单模块
+  二级模块: 订单模块
+
+前置脚本: ""
+
+后置脚本: ""
+
+用例步骤: # 固定的KEY
+- 发送购物车接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}"
+    URL参数:
+      s: /api/buy/add
+      application: app
+      token: '{{msg_token}}'
+    请求数据:
+      buy_type: "cart"
+      address_id: "{{add_id}}"
+      ids: "{{card_id_1}}"
+      payment_id: 4
+      user_note: 通过购物车进行下单
+
+- 提取响应数据-MSG:
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_success
+
+- 断言响应数据MSG:
+    操作类型: 断言文本
+    期望结果: 提交成功
+    实际结果: "{{msg_success}}"
+    比较符: ==
+

@@ -13,6 +13,7 @@
 .PHONY: help init build \
         start start-backend start-langgraph start-ui start-dev start-all \
         dev dev-backend dev-langgraph dev-ui \
+        kill-backend restart-backend \
         stop stop-all restart \
         status logs log-backend log-langgraph log-ui \
         kg-migrate kg-rollback kg-analyze kg-analyze-full kg-shell \
@@ -113,13 +114,19 @@ dev: ## 提示如何启动开发环境
 	@echo "或后台一键启动: make start"
 	@echo ""
 
-dev-backend: ## [终端1] 前台启动 FastAPI 后端 (带热重载)
-	cd $(BACKEND) && PYTHONPATH=. $(PYTHON) -m uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+kill-backend: ## 停止 FastAPI 后端（端口被占用无法 dev-backend 时用）
+	@bash scripts/kill-backend.sh
+
+restart-backend: kill-backend ## 重启 FastAPI 开发后端
+	@$(MAKE) dev-backend
+
+dev-backend: ## [终端1] 前台启动 FastAPI（已在运行则提示，不报错）
+	@bash scripts/run-dev-backend.sh
 
 dev-langgraph: ## [终端2] 前台启动 LangGraph API
 	$(PYTHON) start_server.py
 
-dev-ui: ## [终端3] 前台启动 Next.js 开发服务器
+dev-ui: ## [终端3] 前台启动 Next.js（启动时自动探测后端/LangGraph 端口）
 	cd $(UI) && npm run dev
 
 # ─── 前台生产模式 ────────────────────────────────────────────────────────
@@ -127,13 +134,13 @@ dev-ui: ## [终端3] 前台启动 Next.js 开发服务器
 start-backend: ## [前台] 启动 FastAPI 后端 :8000
 	cd $(BACKEND) && PYTHONPATH=. $(PYTHON) app/main.py
 
-start-ui: ## [前台] 启动 Next.js 前端生产模式 :3000
-	cd $(UI) && npm run start
+start-ui: ## [前台] 探测端口后构建并启动 Next.js 生产模式 :3000
+	@cd $(UI) && bash -c 'source ../scripts/detect-dev-ports.sh && npm run build && exec npm run start:next'
 
 start-langgraph: ## [前台] 启动 LangGraph API :2026
-	$(PYTHON) start_server.py
+	cd $(BACKEND) && PYTHONPATH=. $(PYTHON) ../start_server.py
 
-# ─── 日志 ────────────────────────────────────────────────────────────────
+# ─── dev-ui 已在上方定义 ──────────────────────────────────────────────────
 
 logs: ## 查看所有服务日志 (tail -f)
 	@echo "📋 实时日志 (按 Ctrl+C 退出)..."

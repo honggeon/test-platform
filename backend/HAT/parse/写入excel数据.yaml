@@ -1,0 +1,50 @@
+- 基础配置:
+    用例类型: ApiCase
+    用例标题: 正确登录用例
+    一级模块: 商城-API-用户模块
+    二级模块: 登录模块
+  用例步骤:
+  - 发送post请求:
+      操作类型: 发送请求POST
+      请求地址: http://shop-xo.hctestedu.com
+      请求数据:
+        accounts: youyi
+        pwd: '123456'
+        type: username
+      URL参数:
+        s: /api/user/login
+        application: app
+  - 通过JSONPATH提取数据-MSG:
+      操作类型: 提取数据JSON
+      表达式: $..msg
+      变量名: msg_success
+  - 通过JSONPATH提取数据-TOKEN:
+      操作类型: 提取数据JSON
+      表达式: $..token
+      变量名: token
+  - 断言-等于-响应MSG:
+      操作类型: 断言文本相等
+      期望结果: 登录成功
+      实际结果: '{{msg_success}}'
+- 基础配置:
+    用例类型: ApiCase
+    用例标题: 加入购物车功能
+    一级模块: 商城-API-购物车模块
+    二级模块: 购物车模块
+  用例步骤:
+  - 发送post请求:
+      操作类型: 发送请求POST
+      请求地址: http://shop-xo.hctestedu.com
+      URL参数:
+        s: /api/cart/save
+        application: app
+        token: '{{token}}'
+      请求数据:
+        goods_id: '2'
+        spec: []
+        stock: 1
+      请求类型: json
+  - 通过JSONPATH提取数据-MSG:
+      操作类型: 提取数据JSON
+      表达式: $..msg
+      变量名: msg_success

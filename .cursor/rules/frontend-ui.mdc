@@ -1,0 +1,21 @@
+---
+description: Next.js 前端结构与 API 调用约定
+globs: ui/**/*.{ts,tsx}
+alwaysApply: false
+---
+
+# 前端约定
+
+- 页面：`ui/app/`（App Router）；组件：`ui/components/`；API 客户端：`ui/lib/api/`
+- 文案与 i18n：`ui/lib/translations/zh.ts`
+- 与后端通信走 `ui/lib/api/*`，类型定义在 `ui/lib/api/types.ts`
+- LangGraph 相关配置：`ui/lib/langgraph/config.ts`
+
+## 开发
+
+```bash
+cd ui && npm install
+make dev-ui    # 或 make dev 查看多服务说明
+```
+
+改 API 类型时同步更新 `types.ts` 与对应 `lib/api/*.ts` 封装，避免页面内裸 `fetch` 散落。

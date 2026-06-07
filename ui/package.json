@@ -6,9 +6,11 @@
   "private": true,
   "_releaseId": "id_Mi81OmFIVnBZMlhwbVlqbHJvL3BuYWs2Y1RNMVRBPT06ZTAxZGEwNWI=",
   "scripts": {
-    "dev": "next dev",
+    "dev": "bash ../scripts/run-ui-dev.sh",
+    "dev:next": "next dev",
     "build": "next build",
-    "start": "next start",
+    "start": "bash ../scripts/run-ui-start.sh",
+    "start:next": "next start",
     "lint": "next lint"
   },
   "_versionId": "id_My81OmFIVnBZMlhwbVlqbHJvL3BuYWs2Y1RNMVRBPT06ZTAxZGEwNWI=",

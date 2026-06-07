@@ -18,6 +18,7 @@ export { MoveFolderDialog } from "./move-folder-dialog";
 export { AIGenerateDialog } from "./ai-generate-dialog";
 export { AIGenerateFromDocumentDialog } from "./ai-generate-from-document-dialog";
 export { AIGenerateResultDialog } from "./ai-generate-result-dialog";
+export { ImportTestCasesDialog } from "./import-test-cases-dialog";
 export { AIChatDialog } from "./ai-chat-dialog";
 
 // NOTE  MS8yOmFIVnBZMlhwbVlqbHJvL3BuYWs2YUhoVU1nPT06NDY3OGVjNzM=

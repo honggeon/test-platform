@@ -36,17 +36,37 @@ from app.config.database import async_session_factory
 from app.models.attachment import Attachment, AttachmentEntityType
 from app.models.api_endpoint import APIEndpoint
 from app.models.test_execution_log import TestExecutionLog
-from app.config.minio_client import MinIOClient
+from app.utils.hat_paths import (
+    format_key_dirs_cli,
+    get_api_workspace_root,
+    get_api_workspace_tests_dir,
+    get_hat_home,
+    get_hat_key_dir,
+    get_run_hat_path,
+    resolve_hat_cases_dir,
+    resolve_hat_key_dirs,
+    sanitize_workspace_relative_path,
+    build_execute_path_hint,
+    detect_misplaced_linux_path,
+    is_valid_hat_case_dir,
+)
+from app.utils.allure_report import build_allure_generate_argv, parse_allure_results_dir
+from app.utils.test_environment_url import (
+    mask_agent_payload,
+    mask_sensitive_urls,
+    prepare_hat_cases_with_url,
+    resolve_project_base_url,
+    resolve_project_sensitive_urls,
+    sanitize_allure_results_dir,
+    _is_explicit_public_api_configured,
+)
 
 
 # ============================================================================
 # 测试目录配置
 # ============================================================================
 
-# 测试服务器根目录
-WORKSPACE_TESTS_ROOT = Path(settings.api_workspace_root) / "tests"
-
-
+# 测试服务器根目录（延迟解析，避免 CWD 影响）
 def get_workspace_tests_dir() -> Path:
     """
     获取 workspace 测试目录路径
@@ -54,23 +74,23 @@ def get_workspace_tests_dir() -> Path:
     Returns:
         workspace 测试目录的绝对路径
     """
-    return WORKSPACE_TESTS_ROOT
+    return get_api_workspace_tests_dir()
 
 
 def get_project_root() -> Path:
     """
-    获取项目根目录（用于在 workspace 测试目录中找到 package.json）
+    获取 API workspace 根目录
 
     Returns:
-        项目根目录的绝对路径
+        workspace 根目录的绝对路径
     """
-    return Path(settings.api_workspace_root)
+    return get_api_workspace_root()
 
 
 @tool
 async def execute_api_script(
     local_script_path: str,
-    framework: str = "playwright",
+    framework: str = "hat",
     reporter: str = "html",
     project_identifier: str = "PR-1",
     endpoint_id: Optional[str] = None,
@@ -90,7 +110,7 @@ async def execute_api_script(
 
     Args:
         local_script_path: 本地脚本文件的完整路径（相对或绝对路径）
-        framework: 测试框架 (playwright, jest, pytest)
+        framework: 测试框架 (playwright, jest, pytest, hat)
         reporter: 报告格式 (html, json, list)
         project_identifier: 项目标识符，用于保存测试报告
         endpoint_id: 端点 ID（可选，用于更新测试统计）
@@ -114,10 +134,9 @@ async def execute_api_script(
     """
     try:
         # 1. 解析脚本路径
-        # 清理路径：去除开头的斜杠或反斜杠，标准化分隔符
-        cleaned_path = local_script_path.strip().strip('/').strip('\\')
+        cleaned_path = sanitize_workspace_relative_path(local_script_path)
         script_path = Path(cleaned_path)
-        project_root = Path(settings.api_workspace_root).resolve()
+        project_root = get_api_workspace_root()
         workspace_tests_dir = get_workspace_tests_dir()
 
         # 2. 标准化路径：多策略查找脚本文件
@@ -147,6 +166,21 @@ async def execute_api_script(
                     found = True
                     break
 
+            if not found:
+                # HAT 用例目录：尝试匹配含 context.yaml 的目录
+                for strategy_name, candidate_path in strategies:
+                    dir_candidate = candidate_path
+                    if candidate_path.suffix:
+                        dir_candidate = candidate_path.parent
+                    if dir_candidate.is_dir() and (
+                        (dir_candidate / "context.yaml").exists()
+                        or any(dir_candidate.glob("[0-9]*_*.yaml"))
+                    ):
+                        print(f"[API Script Execution] 目录匹配: {strategy_name} -> {dir_candidate}")
+                        script_path = dir_candidate
+                        found = True
+                        break
+
             if not found and not script_path.suffix:
                 # 尝试自动添加 .spec.ts 扩展名（所有策略都不命中时）
                 for strategy_name, base_path in strategies:
@@ -157,12 +191,62 @@ async def execute_api_script(
                         found = True
                         break
 
-        # 3. 验证脚本文件存在
+        # 3. 验证脚本文件/目录存在
         if not script_path.exists():
+            hint_lines = [
+                f"请使用 workspace 相对路径，例如: {build_execute_path_hint(project_identifier)}",
+                "禁止 Linux 绝对路径（/home/...），文件应位于 backend/workspace/api/tests/ 下",
+                "禁止 write_file 写 HAT 用例，须用 deploy_hat_case 或 deploy_hat_scenario 部署",
+            ]
+            # Agent filesystem 曾误写到 backend/backend/workspace/api（与 execute 根目录不一致）
+            mirror_root = project_root.parent / "backend" / "workspace" / "api"
+            if mirror_root.exists() and local_script_path:
+                mirror_candidate = mirror_root / sanitize_workspace_relative_path(
+                    local_script_path, mirror_root
+                )
+                if mirror_candidate.exists():
+                    hint_lines.append(
+                        f"检测到用例在 Agent 误写目录 {mirror_candidate}；"
+                        "请用 deploy_hat_scenario 重新部署到 canonical workspace，"
+                        "或调用 list_hat_case_dirs 查看可执行路径。"
+                    )
+            if detect_misplaced_linux_path(local_script_path):
+                sanitized = sanitize_workspace_relative_path(local_script_path, project_root)
+                candidate = resolve_hat_cases_dir(
+                    sanitized,
+                    workspace_tests_dir,
+                    project_root,
+                )
+                hint_lines.append(f"规范化后尝试路径: {sanitized}")
+                if candidate.exists():
+                    hint_lines.append(f"已存在目录: {candidate}，请改用 local_script_path={sanitized!r}")
             return json.dumps({
                 "success": False,
-                "error": f"脚本文件不存在: {script_path}"
+                "error": f"脚本路径不存在: {script_path}",
+                "hint": " ".join(hint_lines),
+                "recommended_path_format": build_execute_path_hint(project_identifier),
             }, ensure_ascii=False, indent=2)
+
+        if script_path.is_dir() and framework != "hat":
+            return json.dumps({
+                "success": False,
+                "error": f"目录路径仅支持 framework='hat'，当前为: {framework}"
+            }, ensure_ascii=False, indent=2)
+
+        if framework == "hat":
+            hat_cases_probe = script_path if script_path.is_dir() else script_path.parent
+            if not is_valid_hat_case_dir(hat_cases_probe, workspace_tests_dir):
+                return json.dumps({
+                    "success": False,
+                    "error": (
+                        "HAT 执行路径过宽或无效，禁止执行 tests 根目录。"
+                        "请指定单个用例目录，例如 "
+                        f"{build_execute_path_hint(project_identifier, 'scenario_conversation_flow')}"
+                    ),
+                    "received_path": local_script_path,
+                    "resolved_path": str(hat_cases_probe),
+                    "recommended_path_format": build_execute_path_hint(project_identifier),
+                }, ensure_ascii=False, indent=2)
 
         script_filename = script_path.name
 
@@ -284,7 +368,18 @@ async def execute_api_script(
         if endpoint_id:
             result["endpoint_id"] = endpoint_id
 
-        return json.dumps(result, ensure_ascii=False, indent=2)
+        masked_result = mask_agent_payload(result, await resolve_project_sensitive_urls(project_identifier))
+        masked_result["environment_status"] = {
+            "base_url_injected": True,
+            "display_base_url": "{{API_BASE_URL}}",
+            "public_api_configured": _is_explicit_public_api_configured(),
+            "hint": (
+                "PUBLIC_API_URL/.env 已在服务端加载并注入。"
+                "若仍 ConnectionError，优先检查 YAML 的「请求地址」是否为完整 API 路径"
+                "（如 {{URL}}/api/v2/projects/...），而非重复检查 .env。"
+            ),
+        }
+        return json.dumps(masked_result, ensure_ascii=False, indent=2)
 
     except Exception as e:
         import traceback
@@ -323,49 +418,118 @@ async def _execute_script_internal(
     Returns:
         执行结果字典
     """
+    temp_hat_root: Path | None = None
     try:
         start_time = datetime.now()
+        sensitive_base_url = await resolve_project_base_url(project_identifier)
+        sensitive_urls = await resolve_project_sensitive_urls(project_identifier)
 
-        # 确定测试命令
-        is_windows = sys.platform == "win32"
-        # tests_relative 支持子目录（如 PR-1/api-tests/list.spec.ts），空时兜底用文件名
+        resolved_folder_id: str | None = None
+        if endpoint_id:
+            try:
+                async with async_session_factory() as inject_session:
+                    ep_result = await inject_session.execute(
+                        select(APIEndpoint).where(APIEndpoint.id == UUID(endpoint_id))
+                    )
+                    endpoint = ep_result.scalar_one_or_none()
+                    if endpoint and endpoint.folder_id:
+                        resolved_folder_id = str(endpoint.folder_id)
+            except Exception as e:
+                print(f"[API Script Execution] 预读取 FOLDER_ID 失败(非致命): {e}")
+
+        # 确定测试命令（统一使用 list，兼容 Windows / Linux）
         test_target = tests_relative or script_filename
+        exec_cwd = tests_dir or project_root
 
         if framework == "playwright":
             if reporter == "html":
-                # HTML + JSON + Allure: html给原始报告，json给解析，allure给前端展示，trace抓请求详情
-                if is_windows:
-                    cmd = f'npx playwright test {test_target} --reporter=html,json,allure-playwright --trace=on'
-                else:
-                    cmd = ["npx", "playwright", "test", test_target, "--reporter=html,json,allure-playwright", "--trace=on"]
+                cmd = [
+                    "npx", "playwright", "test", test_target,
+                    "--reporter=html,json,allure-playwright", "--trace=on",
+                ]
             else:
-                if is_windows:
-                    cmd = f'npx playwright test {test_target} --reporter={reporter},json,allure-playwright --trace=on'
-                else:
-                    cmd = ["npx", "playwright", "test", test_target, f"--reporter={reporter},json,allure-playwright", "--trace=on"]
+                cmd = [
+                    "npx", "playwright", "test", test_target,
+                    f"--reporter={reporter},json,allure-playwright", "--trace=on",
+                ]
         elif framework == "jest":
             if reporter == "html":
-                if is_windows:
-                    cmd = f'npm test -- {test_target} --reporter=html'
-                else:
-                    cmd = ["npm", "test", "--", test_target, "--reporter=html"]
+                cmd = ["npm", "test", "--", test_target, "--reporter=html"]
             else:
-                if is_windows:
-                    cmd = f"npm test -- {test_target} --reporter={reporter}"
-                else:
-                    cmd = ["npm", "test", "--", test_target, f"--reporter={reporter}"]
+                cmd = ["npm", "test", "--", test_target, f"--reporter={reporter}"]
         elif framework == "pytest":
-            if is_windows:
-                cmd = f"pytest {test_target} --reporter={reporter}"
-            else:
-                cmd = ["pytest", test_target, f"--reporter={reporter}"]
+            cmd = ["pytest", test_target, "-v"]
+        elif framework == "hat":
+            hat_home = get_hat_home()
+            run_hat_path = get_run_hat_path()
+            key_dir = get_hat_key_dir()
+
+            if not run_hat_path.exists():
+                return {
+                    "success": False,
+                    "error": f"run_hat.py 不存在: {run_hat_path}",
+                }
+
+            cases_dir = resolve_hat_cases_dir(
+                test_target, tests_dir or project_root, project_root
+            )
+            if not is_valid_hat_case_dir(cases_dir, tests_dir or project_root):
+                return {
+                    "success": False,
+                    "error": (
+                        "HAT cases 目录无效或过宽（可能指向了整个 tests 目录）。"
+                        "请传入 tests/{project}/api-tests/{case_slug}/ 形式的单用例路径。"
+                    ),
+                    "resolved_cases_dir": str(cases_dir),
+                    "test_target": test_target,
+                }
+
+            from app.utils.hat_auth import ensure_hat_bearer_token_env
+            from app.utils.hat_yaml_lint import run_hat_preflight
+
+            ensure_hat_bearer_token_env()
+            lint_errors = run_hat_preflight(cases_dir, strict=True)
+            if lint_errors:
+                return {
+                    "success": False,
+                    "error": "HAT 用例 YAML 校验失败",
+                    "lint_errors": lint_errors,
+                    "cases_dir": str(cases_dir),
+                }
+
+            exec_cases_dir, temp_hat_root = prepare_hat_cases_with_url(
+                cases_dir,
+                sensitive_base_url,
+                folder_id=resolved_folder_id,
+                project_identifier=project_identifier,
+            )
+            key_dirs = resolve_hat_key_dirs(exec_cases_dir, key_dir)
+            cases_dir_str = str(exec_cases_dir)
+            exec_cwd = str(hat_home)
+            if temp_hat_root:
+                print(
+                    "[API Script Execution] 已在临时目录注入 HAT context.yaml URL "
+                    f"(workspace 保留占位符): {exec_cases_dir}"
+                )
+
+            cmd = [
+                sys.executable,
+                str(run_hat_path),
+                "--type=yaml",
+                f"--cases={cases_dir_str}",
+                f"--keyDir={format_key_dirs_cli(key_dirs)}",
+                "-v",
+                "--clean-alluredir",
+                "--alluredir=allure-results",
+            ]
         else:
             return {
                 "success": False,
                 "error": f"不支持的测试框架: {framework}"
             }
 
-        print(f"[API Script Execution] 执行命令: {cmd if is_windows else ' '.join(cmd)}")
+        print(f"[API Script Execution] 执行命令: {' '.join(cmd)}")
+        print(f"[API Script Execution] 工作目录: {exec_cwd}")
         print(f"[API Script Execution] 项目根目录: {project_root}")
         print(f"[API Script Execution] 测试目录: {tests_dir}")
 
@@ -374,51 +538,57 @@ async def _execute_script_internal(
         if reporter == "html":
             env['CI'] = '1'
 
-        # ============================================================
-        # 自动注入测试环境配置（来自 DB，不经过 LLM，保护私密 URL）
-        # 脚本中统一使用 process.env.API_BASE_URL / process.env.FOLDER_ID
-        # ============================================================
+        # 注入测试环境变量（不经过 LLM；HAT conftest 的 apply_hat_runtime_urls 优先读 API_BASE_URL）
+        env["API_BASE_URL"] = sensitive_base_url
+        print(f"[API Script Execution] 已注入 API_BASE_URL={sensitive_base_url}")
+
+        for cred_key in (
+            "HAT_TEST_EMAIL",
+            "HAT_TEST_PASSWORD",
+            "HAT_TEST_ACCOUNT",
+            "HAT_ADMIN_EMAIL",
+            "HAT_ADMIN_PASSWORD",
+        ):
+            cred_val = os.environ.get(cred_key)
+            if cred_val:
+                env[cred_key] = cred_val
+
+        from app.utils.hat_auth import ensure_hat_bearer_token_env
+        from app.utils.test_environment_url import resolve_bearer_token
+
+        if framework == "hat":
+            ensure_hat_bearer_token_env()
+        bearer_token = resolve_bearer_token()
+        if bearer_token and not env.get("HAT_BEARER_TOKEN"):
+            env["HAT_BEARER_TOKEN"] = bearer_token
+            print("[API Script Execution] 已注入 HAT_BEARER_TOKEN (长度已隐藏)")
+
         if project_identifier:
+            env.setdefault("PROJECT_IDENTIFIER", project_identifier)
+            env.setdefault("project_identifier", project_identifier)
+
+        if resolved_folder_id and not env.get("FOLDER_ID"):
+            env["FOLDER_ID"] = resolved_folder_id
+            env["folder_id"] = resolved_folder_id
+            print(f"[API Script Execution] 已注入 FOLDER_ID={resolved_folder_id}")
+        elif endpoint_id and not env.get("FOLDER_ID"):
             try:
                 async with async_session_factory() as inject_session:
-                    from sqlalchemy import select as sel
-                    from app.models.project import Project as ProjModel
-                    from app.repositories.test_environment_repo import TestEnvironmentRepository
-                    proj_result = await inject_session.execute(
-                        sel(ProjModel).where(ProjModel.identifier == project_identifier)
+                    ep_result = await inject_session.execute(
+                        select(APIEndpoint).where(APIEndpoint.id == UUID(endpoint_id))
                     )
-                    project = proj_result.scalar_one_or_none()
-                    if project:
-                        # 1. 注入默认环境 URL
-                        if not env.get('API_BASE_URL'):
-                            repo = TestEnvironmentRepository(inject_session)
-                            env_obj = await repo.get_default(project.id)
-                            # 没有默认环境时，使用第一个环境作为兜底
-                            if not env_obj:
-                                envs = await repo.list_by_project(project.id)
-                                if envs:
-                                    env_obj = envs[0]
-                            if env_obj and env_obj.base_url:
-                                env['API_BASE_URL'] = env_obj.base_url.rstrip('/')
-                                print(f"[API Script Execution] 已注入 API_BASE_URL (来自项目默认环境)")
-
-                        # 2. 注入 folder_id（优先从 endpoint 获取）
-                        if endpoint_id and not env.get('FOLDER_ID'):
-                            ep_result = await inject_session.execute(
-                                sel(APIEndpoint).where(APIEndpoint.id == UUID(endpoint_id))
-                            )
-                            endpoint = ep_result.scalar_one_or_none()
-                            if endpoint and endpoint.folder_id:
-                                env['FOLDER_ID'] = str(endpoint.folder_id)
-                                print(f"[API Script Execution] 已注入 FOLDER_ID (来自端点 {endpoint_id})")
+                    endpoint = ep_result.scalar_one_or_none()
+                    if endpoint and endpoint.folder_id:
+                        env["FOLDER_ID"] = str(endpoint.folder_id)
+                        env["folder_id"] = str(endpoint.folder_id)
+                        print(f"[API Script Execution] 已注入 FOLDER_ID (来自端点 {endpoint_id})")
             except Exception as e:
-                print(f"[API Script Execution] 注入环境配置失败(非致命): {e}")
-        # ============================================================
+                print(f"[API Script Execution] 注入 FOLDER_ID 失败(非致命): {e}")
 
         # 执行测试（异步，不阻塞事件循环）
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=tests_dir or project_root,
+            cwd=exec_cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -438,6 +608,14 @@ async def _execute_script_internal(
 
         stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ''
         stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ''
+
+        # ============================================================
+        # 脱敏：将 stdout/stderr 中的真实测试环境 URL 替换为占位符
+        # 防止执行日志中的敏感 URL 通过 Agent 工具返回值暴露给 LLM
+        # ============================================================
+        stdout = mask_sensitive_urls(stdout, sensitive_urls)
+        stderr = mask_sensitive_urls(stderr, sensitive_urls)
+
         return_code = proc.returncode
 
         end_time = datetime.now()
@@ -529,7 +707,9 @@ async def _execute_script_internal(
                     },
                 }
 
-                # 保存到 MinIO
+                structured_report = mask_agent_payload(structured_report, sensitive_urls)
+
+                # 保存到 MinIO（供人查阅；Agent 经 get_artifact_content 读时会再次脱敏）
                 minio_path = f"test-reports/{project_identifier}/{timestamp_str}/report.json"
                 MinIOClient.upload_bytes(
                     object_name=minio_path,
@@ -540,6 +720,33 @@ async def _execute_script_internal(
                 print(f"[API Script Execution] 结构化报告已保存到 MinIO: {minio_path}")
         except Exception as parse_e:
             print(f"[API Script Execution] JSON 报告解析/保存失败(非致命): {parse_e}")
+
+        # HAT：从 allure-results 生成结构化 JSON 报告（Playwright 走 stdout JSON）
+        if framework == "hat" and not structured_report_minio:
+            try:
+                hat_allure_dir = get_hat_home() / "allure-results"
+                hat_structured = parse_allure_results_dir(hat_allure_dir)
+                if hat_structured:
+                    timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    structured_report = {
+                        "generated_at": datetime.now().isoformat(),
+                        "framework": framework,
+                        "test_path": test_target,
+                        "exit_code": return_code,
+                        "project_identifier": project_identifier,
+                        "structured": hat_structured,
+                    }
+                    structured_report = mask_agent_payload(structured_report, sensitive_urls)
+                    minio_path = f"test-reports/{project_identifier or 'default'}/{timestamp_str}/report.json"
+                    MinIOClient.upload_bytes(
+                        object_name=minio_path,
+                        data=json.dumps(structured_report, ensure_ascii=False, indent=2).encode("utf-8"),
+                        content_type="application/json",
+                    )
+                    structured_report_minio = minio_path
+                    print(f"[API Script Execution] HAT 结构化报告已保存到 MinIO: {minio_path}")
+            except Exception as hat_report_err:
+                print(f"[API Script Execution] HAT 结构化报告保存失败(非致命): {hat_report_err}")
 
         result_dict = {
             "success": return_code == 0,
@@ -558,28 +765,42 @@ async def _execute_script_internal(
         allure_report_url = None
         allure_minio_path = None
         try:
-            workspace_root = Path(settings.api_workspace_root)
-            # allure-results 可能在 workspace_root 或 tests_dir 下
-            allure_results_dir = workspace_root / "allure-results"
-            if not (allure_results_dir.exists() and any(allure_results_dir.iterdir())):
-                # 检查 tests_dir 下的 allure-results
-                alt_dir = Path(tests_dir or "") / "allure-results" if tests_dir else None
-                if alt_dir and alt_dir.exists() and any(alt_dir.iterdir()):
-                    allure_results_dir = alt_dir
-            if allure_results_dir.exists() and any(allure_results_dir.iterdir()):
+            workspace_root = get_api_workspace_root()
+            allure_candidates = [
+                get_hat_home() / "allure-results",
+                workspace_root / "allure-results",
+            ]
+            if tests_dir:
+                allure_candidates.append(Path(tests_dir) / "allure-results")
+
+            allure_results_dir = None
+            for candidate in allure_candidates:
+                if candidate.exists() and any(candidate.iterdir()):
+                    allure_results_dir = candidate
+                    break
+            if allure_results_dir:
                 import shutil
+                sanitize_allure_results_dir(allure_results_dir, sensitive_urls)
                 timestamp_ts = int(datetime.now().timestamp())
                 allure_report_dir = workspace_root / f"allure-report-{timestamp_ts}"
 
+                allure_cmd = build_allure_generate_argv(allure_results_dir, allure_report_dir)
                 proc_allure = await asyncio.create_subprocess_exec(
-                    "allure", "generate", str(allure_results_dir),
-                    "-o", str(allure_report_dir), "--clean",
+                    *allure_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await asyncio.wait_for(proc_allure.communicate(), timeout=60)
+                allure_stdout, allure_stderr = await asyncio.wait_for(
+                    proc_allure.communicate(), timeout=60
+                )
+                if proc_allure.returncode != 0:
+                    print(
+                        "[API Script Execution] Allure generate 失败: "
+                        f"rc={proc_allure.returncode}, "
+                        f"stderr={allure_stderr.decode('utf-8', errors='replace')[:500]}"
+                    )
 
-                if allure_report_dir.exists():
+                if allure_report_dir.exists() and (allure_report_dir / "index.html").exists():
                     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
                     zip_path = workspace_root / f"allure-report-{timestamp_str}.zip"
                     shutil.make_archive(str(zip_path.with_suffix('')), 'zip', str(allure_report_dir))
@@ -619,6 +840,9 @@ async def _execute_script_internal(
             "success": False,
             "error": f"执行脚本时发生错误: {str(e)}"
         }
+    finally:
+        if temp_hat_root:
+            shutil.rmtree(temp_hat_root, ignore_errors=True)
 
 
 async def _save_test_report(

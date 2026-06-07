@@ -267,34 +267,34 @@ export function APIEndpointSidebar({
   const handleAIGenerate = async () => {
     if (!endpoint) return;
 
-    // 获取项目的默认测试环境
-    let envUrl = "";
+    // 检查项目是否已配置默认测试环境（不将真实 URL 传给 LLM）
+    let hasDefaultEnv = false;
     try {
       const envModule = await import("@/lib/api/environments");
       const envResp = await envModule.getDefaultEnvironment(projectId);
       const envData = envResp as unknown as { success: boolean; data: { base_url: string } | null };
-      if (envData?.data?.base_url) {
-        envUrl = envData.data.base_url;
-      }
+      hasDefaultEnv = !!envData?.data?.base_url;
     } catch {
       // 没有配置环境不影响生成
     }
 
-    // 简化的 prompt：包含环境信息和基本指令
-    const envLine = envUrl
-      ? `\n目标测试环境: ${envUrl}`
-      : "\n注意: 项目未配置测试环境，生成脚本时使用 process.env.API_BASE_URL 作为地址";
+    // 简化的 prompt：告知 LLM 环境状态，但不暴露真实 URL
+    const envLine = hasDefaultEnv
+      ? "\n注意: 项目已配置默认测试环境，平台执行时会自动将真实 URL 注入 context.yaml。HAT YAML 中使用 {{URL}} 或 {{API_BASE_URL}}，禁止硬编码 URL/IP。"
+      : "\n注意: 项目未配置测试环境，请在项目测试环境页配置 base_url。HAT YAML 使用 {{API_BASE_URL}} 占位符。";
+
+    const authLine = `
+鉴权: 若接口 security 含 Bearer，测试计划「认证配置」须写明 token 来源；脚本须为 HAT 格式（基础配置+用例步骤），含 0_login.yaml（跨服务登录）或 context 使用 {{AUTH_TOKEN}}（.env 配置 HAT_TEST_EMAIL/HAT_TEST_PASSWORD 或 HAT_BEARER_TOKEN）。禁止 config/tests 结构与 YOUR_BEARER_TOKEN_HERE。生成后必须 deploy_hat_case 再执行。`;
 
     const prompt = `基于你的技能和工具完成如下任务：
 1. 获取接口详细信息
-2. 生成测试计划并保存
+2. 生成测试计划并保存（含「生成指引」认证配置）
 3. 生成测试用例并保存
-4. 生成测试脚本并保存
-5. 保存测试成果到数据库
+4. 生成 HAT 脚本（0_*.yaml）并 deploy_hat_case 部署到 workspace
+5. save_test_script 保存元数据
 
 端点 ID: ${endpointId}
-项目 ID: ${projectId}${envLine}${userRequirements.trim() ? `\n
-用户要求: ${userRequirements.trim()}` : ""}`;
+项目 ID: ${projectId}${envLine}${authLine}${userRequirements.trim() ? `\n用户要求: ${userRequirements.trim()}` : ""}`;
 
     if (onOpenAIChat) {
       onOpenAIChat(prompt);

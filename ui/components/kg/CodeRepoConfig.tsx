@@ -57,7 +57,7 @@ export function CodeRepoConfig({
       ) : (
         <>
           <Input
-            placeholder="Git 地址或本地路径"
+            placeholder="Git 地址或本地路径 (如 D:\projects\repo)"
             value={repoUrl}
             onChange={(e) => onRepoUrlChange(e.target.value)}
             className="text-xs"
@@ -123,9 +123,15 @@ export function CodeRepoConfig({
           )}
           {analyzing && repoStatus && (
             <div className="pt-1">
-              <Progress value={Math.max(repoStatus.progress, 2)} className="h-1.5" />
-              <p className="mt-1 text-xs text-muted-foreground">{repoStatus.current_step}</p>
+              <Progress value={Math.min(Math.max(repoStatus.progress, 2), 100)} className="h-1.5" />
+              <p className="mt-1 text-xs text-muted-foreground">
+                {repoStatus.current_step}
+                {repoStatus.message ? ` — ${repoStatus.message}` : ""}
+              </p>
             </div>
+          )}
+          {!analyzing && repoStatus?.current_step === "失败" && repoStatus.message && (
+            <p className="text-xs text-red-500">{repoStatus.message}</p>
           )}
         </>
       )}

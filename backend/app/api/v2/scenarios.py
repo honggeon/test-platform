@@ -15,7 +15,7 @@
 from typing import List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Body
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -489,3 +489,55 @@ async def get_step_results(
         )
 
     return await service.get_step_results(run_id)
+
+
+# ==================== 批量操作 ====================
+
+@router.post("/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def bulk_delete_scenarios(
+    db: DbSessionDep,
+    current_user_id: CurrentUserIdDep,
+    data: dict = Body(...),
+):
+    """批量删除场景"""
+    scenario_ids = data.get("scenario_ids", [])
+    service = ScenarioService(db)
+    for scenario_id in scenario_ids:
+        try:
+            await service.delete_scenario(UUID(scenario_id))
+        except ValueError:
+            continue
+    return None
+
+
+@router.post("/bulk-run", response_model=ScenarioExecuteResponse)
+async def bulk_run_scenarios(
+    db: DbSessionDep,
+    current_user_id: CurrentUserIdDep,
+    data: dict = Body(...),
+    background_tasks: BackgroundTasks = None,
+):
+    """批量执行场景"""
+    scenario_ids = data.get("scenario_ids", [])
+    variables = data.get("variables", {})
+    base_url = data.get("base_url", "")
+
+    service = ScenarioService(db)
+    run_ids = []
+    for scenario_id in scenario_ids:
+        try:
+            run_id = await service.execute_scenario_async(
+                scenario_id=UUID(scenario_id),
+                variables=variables,
+                base_url=base_url,
+                executed_by=current_user_id,
+            )
+            run_ids.append(str(run_id))
+        except ValueError:
+            continue
+
+    return ScenarioExecuteResponse(
+        run_id=run_ids[0] if run_ids else UUID(int=0),
+        status="queued",
+        message=f"已启动 {len(run_ids)} 个场景的执行"
+    )

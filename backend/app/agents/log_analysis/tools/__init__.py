@@ -16,19 +16,19 @@ from typing import List
 
 from langchain_core.tools import BaseTool
 
-from app.agents.log_analysis.tools.diagnosis_tools import (
-    diagnose_failure,
-    notify_frontend,
-    save_diagnosis_report,
-)
-from app.agents.log_analysis.tools.log_query_tools import get_log_detail, query_test_logs
-
 
 def get_log_analysis_tools() -> List[BaseTool]:
     """获取日志分析 Agent 的所有本地工具列表
 
-    返回可用于 deepagents 创建 Agent 的工具列表。
+    延迟导入各工具模块，避免与 TestDiagnosisService 循环依赖。
     """
+    from app.agents.log_analysis.tools.diagnosis_tools import (
+        diagnose_failure,
+        notify_frontend,
+        save_diagnosis_report,
+    )
+    from app.agents.log_analysis.tools.log_query_tools import get_log_detail, query_test_logs
+
     return [
         query_test_logs,
         get_log_detail,

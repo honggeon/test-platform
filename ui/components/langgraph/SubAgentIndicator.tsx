@@ -11,7 +11,7 @@
 
 import React from "react";
 import { Button } from "@/components/ui/button";
-import { ChevronDown, ChevronUp } from "lucide-react";
+import { ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import type { SubAgent } from "@/lib/langgraph/types";
 
 interface SubAgentIndicatorProps {
@@ -32,8 +32,16 @@ export const SubAgentIndicator = React.memo<SubAgentIndicatorProps>(
         >
           <div className="flex w-full items-center justify-between gap-2">
             <div className="flex items-center gap-2">
+              {(subAgent.status === "pending" || subAgent.status === "active") && (
+                <Loader2 className="h-4 w-4 shrink-0 animate-spin text-[#70707B]" />
+              )}
               <span className="font-sans text-[15px] font-bold leading-[140%] tracking-[-0.6px] text-[#3F3F46]">
                 {subAgent.subAgentName}
+                {(subAgent.status === "pending" || subAgent.status === "active") && (
+                  <span className="ml-2 text-xs font-normal text-[#70707B]">
+                    执行中…
+                  </span>
+                )}
               </span>
             </div>
             {isExpanded ? (

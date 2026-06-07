@@ -44,6 +44,20 @@ class TestRunRepository:
         stmt = select(TestRun).where(TestRun.identifier == identifier)
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def get_by_project_and_name(
+        self,
+        project_id: UUID,
+        name: str,
+    ) -> Optional[TestRun]:
+        """根据项目 ID 和名称获取测试运行"""
+        stmt = (
+            select(TestRun)
+            .where(and_(TestRun.project_id == project_id, TestRun.name == name))
+            .limit(1)
+        )
+        result = await self.session.execute(stmt)
+        return result.scalar_one_or_none()
     
     async def get_list(
         self,

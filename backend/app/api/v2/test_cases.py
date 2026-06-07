@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Optional, Union, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Query, status, Request, Response, Body
+from fastapi import APIRouter, Query, status, Request, Response, Body, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,8 +33,10 @@ from app.schemas.test_case import (
     TestCaseCreate, TestCaseUpdate, TestCaseInfo, TestCaseMinifiedInfo,
     BulkTestCaseRequest, BulkEditWithOperationsRequest, BulkDeleteRequest,
     BulkOperationResponse, ExportBDDRequest, ExportBDDResponse,
-    ExportStatusResponse, TestCaseHistoryResponse
+    ExportStatusResponse,     TestCaseHistoryResponse, TestCaseImportResponse,
+    ImportTestCasesFromApiRequest, LatestTestResultUpdate,
 )
+from app.utils.test_case_import import build_csv_template
 from app.schemas.common import SuccessResponse, MessageResponse
 from app.schemas.pagination import PaginatedResponse, PaginationInfo
 from app.schemas.enums import Priority, TestCaseState, TestCaseType
@@ -217,6 +219,161 @@ async def get_folder_test_cases(
 
 
 @router.get(
+    "/test-cases/import-template",
+    summary="下载测试用例导入模板",
+    description="下载 CSV 格式的测试用例导入模板",
+)
+async def download_test_case_import_template() -> Response:
+    """下载 CSV 导入模板"""
+    content = build_csv_template()
+    return Response(
+        content=content,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": 'attachment; filename="test-cases-import-template.csv"'
+        },
+    )
+
+
+# ============ 创建 / 导入测试用例接口（静态路径，必须在 {test_case_identifier} 之前） ============
+
+@router.post(
+    "/test-cases",
+    response_model=SuccessResponse[TestCaseInfo],
+    status_code=status.HTTP_201_CREATED,
+    summary="创建测试用例",
+    description="在项目根目录下创建新的测试用例（不指定文件夹）",
+)
+async def create_test_case(
+    project_identifier: str,
+    data: TestCaseCreate,
+    service: TestCaseServiceDep,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+) -> SuccessResponse[TestCaseInfo]:
+    """在项目根目录创建测试用例（不关联文件夹）"""
+    test_case = await service.create_test_case(
+        project_identifier, data, current_user_id, folder_id=None
+    )
+    await db.commit()
+    return SuccessResponse(success=True, data=test_case)
+
+
+@router.post(
+    "/test-cases/import",
+    response_model=TestCaseImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="导入测试用例",
+    description="从 CSV、Excel (.xlsx) 或 JSON 文件批量导入测试用例",
+)
+async def import_test_cases(
+    project_identifier: str,
+    service: TestCaseServiceDep,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+    file: UploadFile = File(..., description="CSV / Excel / JSON 文件"),
+    folder_id: Optional[UUID] = Form(default=None, description="目标文件夹 ID"),
+) -> TestCaseImportResponse:
+    """批量导入测试用例"""
+    content = await file.read()
+    if not content:
+        from app.utils.exceptions import BadRequestException
+        raise BadRequestException("上传文件为空")
+
+    result = await service.import_test_cases(
+        project_identifier,
+        file.filename or "import.csv",
+        content,
+        current_user_id,
+        folder_id=folder_id,
+    )
+    await db.commit()
+    return TestCaseImportResponse(
+        success=result["imported_count"] > 0,
+        message=result["message"],
+        imported_count=result["imported_count"],
+        failed_count=result["failed_count"],
+        errors=result["errors"],
+        test_cases=result["test_cases"],
+    )
+
+
+@router.post(
+    "/test-cases/import-from-api",
+    response_model=TestCaseImportResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="从 API 测试导入测试用例",
+    description="将 API 测试中 AI 生成的测试用例成果物导入到测试用例库",
+)
+async def import_test_cases_from_api(
+    project_identifier: str,
+    data: ImportTestCasesFromApiRequest,
+    service: TestCaseServiceDep,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep,
+) -> TestCaseImportResponse:
+    """从 API 测试成果物导入测试用例"""
+    result = await service.import_test_cases_from_api_endpoints(
+        project_identifier,
+        data.endpoint_ids,
+        current_user_id,
+        folder_id=data.folder_id,
+    )
+    await db.commit()
+    return TestCaseImportResponse(
+        success=result["imported_count"] > 0,
+        message=result["message"],
+        imported_count=result["imported_count"],
+        failed_count=result["failed_count"],
+        errors=result["errors"],
+        test_cases=result["test_cases"],
+    )
+
+
+@router.post(
+    "/test-cases/export-bdd",
+    response_model=ExportBDDResponse,
+    summary="导出 BDD 测试用例",
+    description="启动 BDD 测试用例导出任务，生成 .feature 文件",
+)
+async def export_bdd_test_cases(
+    project_identifier: str,
+    data: ExportBDDRequest,
+    service: TestCaseServiceDep,
+    export_service: ExportServiceDep,
+) -> ExportBDDResponse:
+    """导出 BDD 测试用例"""
+    export_result = await export_service.start_bdd_export(
+        project_identifier, data
+    )
+    return export_result
+
+
+@router.patch(
+    "/test-cases/with-operations",
+    response_model=BulkOperationResponse,
+    summary="带操作符的批量更新",
+    description="使用操作符（ignore, replace, add, remove）批量更新测试用例",
+)
+async def bulk_update_with_operations(
+    project_identifier: str,
+    data: BulkEditWithOperationsRequest,
+    service: TestCaseServiceDep,
+    db: DbSessionDep,
+) -> BulkOperationResponse:
+    """带操作符的批量更新测试用例"""
+    affected_count = await service.bulk_update_with_operations(
+        project_identifier, data
+    )
+    await db.commit()
+    return BulkOperationResponse(
+        success=True,
+        message=f"成功更新 {affected_count} 个测试用例",
+        affected_count=affected_count
+    )
+
+
+@router.get(
     "/test-cases/{test_case_identifier}",
     response_model=SuccessResponse[TestCaseInfo],
     summary="获取测试用例详情",
@@ -231,8 +388,6 @@ async def get_test_case(
     test_case = await service.get_test_case(project_identifier, test_case_identifier)
     return SuccessResponse(success=True, data=test_case)
 
-
-# ============ 创建测试用例接口 ============
 
 @router.post(
     "/folders/{folder_id}/test-cases",
@@ -281,6 +436,29 @@ async def create_test_case_in_folder(
 
 
 # ============ 更新测试用例接口 ============
+
+@router.patch(
+    "/test-cases/{test_case_identifier}/latest-test-result",
+    response_model=SuccessResponse[TestCaseInfo],
+    summary="更新最近测试结果",
+    description="设置或清除测试用例最近一次测试结果",
+)
+async def update_latest_test_result(
+    project_identifier: str,
+    test_case_identifier: str,
+    data: LatestTestResultUpdate,
+    service: TestCaseServiceDep,
+    db: DbSessionDep,
+) -> SuccessResponse[TestCaseInfo]:
+    """更新测试用例最近一次测试结果"""
+    test_case = await service.set_latest_test_result_status(
+        project_identifier,
+        test_case_identifier,
+        data.status,
+    )
+    await db.commit()
+    return SuccessResponse(success=True, data=test_case)
+
 
 @router.patch(
     "/test-cases/{test_case_identifier}",
@@ -356,42 +534,6 @@ async def bulk_update_test_cases(
     )
 
 
-@router.patch(
-    "/test-cases/with-operations",
-    response_model=BulkOperationResponse,
-    summary="带操作符的批量更新",
-    description="使用操作符（ignore, replace, add, remove）批量更新测试用例",
-)
-async def bulk_update_with_operations(
-    project_identifier: str,
-    data: BulkEditWithOperationsRequest,
-    service: TestCaseServiceDep,
-    db: DbSessionDep,
-) -> BulkOperationResponse:
-    """
-    带操作符的批量更新测试用例
-
-    支持的操作符：
-    - **ignore**: 保持现有值不变
-    - **replace**: 用提供的值覆盖当前值
-    - **add**: 将提供的值追加到现有列表（多值字段）
-    - **remove**: 从现有列表中移除指定的值（多值字段）
-
-    各字段支持的操作符：
-    - automation_status, case_type, priority, state, owner, preconditions: ignore, replace
-    - tags, issues, custom_fields: ignore, add, remove, replace
-    """
-    affected_count = await service.bulk_update_with_operations(
-        project_identifier, data
-    )
-    await db.commit()
-    return BulkOperationResponse(
-        success=True,
-        message=f"成功更新 {affected_count} 个测试用例",
-        affected_count=affected_count
-    )
-
-
 @router.delete(
     "/test-cases",
     response_model=BulkOperationResponse,
@@ -419,36 +561,6 @@ async def bulk_delete_test_cases(
         message=f"成功删除 {affected_count} 个测试用例",
         affected_count=affected_count
     )
-
-
-# ============ BDD 导出接口 ============
-
-@router.post(
-    "/test-cases/export-bdd",
-    response_model=ExportBDDResponse,
-    summary="导出 BDD 测试用例",
-    description="启动 BDD 测试用例导出任务，生成 .feature 文件",
-)
-async def export_bdd_test_cases(
-    project_identifier: str,
-    data: ExportBDDRequest,
-    service: TestCaseServiceDep,
-    export_service: ExportServiceDep,
-) -> ExportBDDResponse:
-    """
-    导出 BDD 测试用例
-
-    - **test_case_ids**: 要导出的测试用例标识符列表
-    - **combine_into_one**: 是否合并为单个 .feature 文件
-    - **combined_feature**: 合并后的 Feature 名称（combine_into_one=true 时必填）
-    - **combined_background**: 合并后的 Background 内容（可选）
-
-    返回导出任务 ID 和状态查询 URL
-    """
-    export_result = await export_service.start_bdd_export(
-        project_identifier, data
-    )
-    return export_result
 
 
 # ============ 测试用例历史接口 ============

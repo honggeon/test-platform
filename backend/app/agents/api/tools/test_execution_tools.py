@@ -16,6 +16,8 @@ API 测试执行工具
 import json
 import asyncio
 import os
+import sys
+import shutil
 import traceback
 from pathlib import Path
 from typing import Optional
@@ -23,14 +25,30 @@ from datetime import datetime
 
 from langchain_core.tools import tool
 
-# 工作目录路径：复用 api_test_executor.py 中的配置
 from app.config import settings
-
-# MinIO 客户端
 from app.config.minio_client import MinIOClient
+from app.utils.allure_report import build_allure_generate_argv, parse_allure_results_dir
+from app.utils.hat_paths import (
+    format_key_dirs_cli,
+    get_api_workspace_root,
+    get_api_workspace_tests_dir,
+    get_hat_home,
+    get_hat_key_dir,
+    get_run_hat_path,
+    resolve_hat_cases_dir,
+    resolve_hat_key_dirs,
+)
+from app.utils.test_environment_url import (
+    mask_agent_payload,
+    mask_sensitive_urls,
+    prepare_hat_cases_with_url,
+    resolve_project_base_url,
+    resolve_project_sensitive_urls,
+    sanitize_allure_results_dir,
+)
 
 
-WORKSPACE_DIR = Path(settings.api_workspace_root)
+WORKSPACE_DIR = get_api_workspace_root()
 
 
 def _parse_playwright_json(stdout: str) -> Optional[dict]:
@@ -212,7 +230,7 @@ def _build_readable_summary(structured: dict) -> str:
 @tool
 async def run_tests(
     test_path: str,
-    framework: str = "playwright",
+    framework: str = "hat",
     reporter: str = "list",
     project_identifier: str = "default",
 ) -> str:
@@ -236,15 +254,67 @@ async def run_tests(
         ...     project_identifier="my-project"
         ... )
     """
+    temp_hat_root: Path | None = None
     try:
+        workspace_dir = get_api_workspace_root()
+        exec_cwd = str(workspace_dir)
+        sensitive_base_url = await resolve_project_base_url(project_identifier)
+        sensitive_urls = await resolve_project_sensitive_urls(project_identifier)
+
         # 确定测试命令
         if framework == "playwright":
-            # 使用 json + allure-playwright 双 reporter + 追踪详细请求
             cmd = ["npx", "playwright", "test", test_path, "--reporter=json,allure-playwright", "--trace=on"]
         elif framework == "jest":
             cmd = ["npm", "test", "--", test_path, f"--reporter={reporter}"]
         elif framework == "pytest":
-            cmd = ["pytest", test_path, f"--reporter={reporter}"]
+            cmd = ["pytest", test_path, "-v"]
+        elif framework == "hat":
+            run_hat_path = get_run_hat_path()
+            key_dir = get_hat_key_dir()
+            hat_home = get_hat_home()
+
+            if not run_hat_path.exists():
+                return json.dumps({
+                    "success": False,
+                    "error": f"run_hat.py 不存在: {run_hat_path}",
+                }, ensure_ascii=False, indent=2)
+
+            cases_dir = resolve_hat_cases_dir(
+                test_path,
+                get_api_workspace_tests_dir(),
+                workspace_dir,
+            )
+
+            from app.utils.hat_auth import ensure_hat_bearer_token_env
+            from app.utils.hat_yaml_lint import run_hat_preflight
+
+            ensure_hat_bearer_token_env()
+            lint_errors = run_hat_preflight(cases_dir, strict=True)
+            if lint_errors:
+                return json.dumps({
+                    "success": False,
+                    "error": "HAT 用例 YAML 校验失败",
+                    "lint_errors": lint_errors,
+                    "cases_dir": str(cases_dir),
+                }, ensure_ascii=False, indent=2)
+
+            exec_cases_dir, temp_hat_root = prepare_hat_cases_with_url(
+                cases_dir,
+                sensitive_base_url,
+                project_identifier=project_identifier,
+            )
+            key_dirs = resolve_hat_key_dirs(exec_cases_dir, key_dir)
+            exec_cwd = str(hat_home)
+            cmd = [
+                sys.executable,
+                str(run_hat_path),
+                "--type=yaml",
+                f"--cases={exec_cases_dir}",
+                f"--keyDir={format_key_dirs_cli(key_dirs)}",
+                "-v",
+                "--clean-alluredir",
+                "--alluredir=allure-results",
+            ]
         else:
             return json.dumps({
                 "success": False,
@@ -254,14 +324,31 @@ async def run_tests(
         # 准备环境变量
         env = os.environ.copy()
         env['CI'] = '1'
-        # 脚本中常用的 API_BASE_URL 默认值
-        if 'API_BASE_URL' not in env:
-            env['API_BASE_URL'] = 'http://localhost:8000'
+        env['API_BASE_URL'] = sensitive_base_url
+        for cred_key in (
+            'HAT_TEST_EMAIL',
+            'HAT_TEST_PASSWORD',
+            'HAT_TEST_ACCOUNT',
+            'HAT_ADMIN_EMAIL',
+            'HAT_ADMIN_PASSWORD',
+        ):
+            cred_val = os.environ.get(cred_key)
+            if cred_val:
+                env[cred_key] = cred_val
+
+        from app.utils.hat_auth import ensure_hat_bearer_token_env
+        from app.utils.test_environment_url import resolve_bearer_token
+
+        if framework == "hat":
+            ensure_hat_bearer_token_env()
+        bearer_token = resolve_bearer_token()
+        if bearer_token and not env.get("HAT_BEARER_TOKEN"):
+            env["HAT_BEARER_TOKEN"] = bearer_token
 
         # 执行测试（异步，不阻塞事件循环）
         proc = await asyncio.create_subprocess_exec(
             *cmd,
-            cwd=str(WORKSPACE_DIR),
+            cwd=exec_cwd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             env=env,
@@ -281,6 +368,8 @@ async def run_tests(
 
         stdout = stdout_bytes.decode('utf-8', errors='replace') if stdout_bytes else ''
         stderr = stderr_bytes.decode('utf-8', errors='replace') if stderr_bytes else ''
+        stdout = mask_sensitive_urls(stdout, sensitive_urls)
+        stderr = mask_sensitive_urls(stderr, sensitive_urls)
         return_code = proc.returncode
 
         # 解析 Playwright JSON 报告
@@ -324,29 +413,75 @@ async def run_tests(
                     # MinIO 保存失败不阻塞主流程
                     print(f"[WARN] Failed to save report to MinIO: {minio_err}")
 
+        # HAT：从 allure-results 生成结构化 JSON 报告
+        if framework == "hat" and not structured:
+            try:
+                hat_allure_dir = get_hat_home() / "allure-results"
+                hat_structured = parse_allure_results_dir(hat_allure_dir)
+                if hat_structured:
+                    structured = hat_structured
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    object_name = f"test-reports/{project_identifier}/{timestamp}/report.json"
+                    report_data = json.dumps({
+                        "structured": structured,
+                        "project_identifier": project_identifier,
+                        "framework": framework,
+                        "test_path": test_path,
+                        "exit_code": return_code,
+                        "generated_at": datetime.now().isoformat(),
+                    }, ensure_ascii=False, indent=2)
+                    MinIOClient.upload_bytes(
+                        object_name=object_name,
+                        data=report_data.encode("utf-8"),
+                        content_type="application/json",
+                    )
+                    from datetime import timedelta
+                    report_url = MinIOClient.get_presigned_url(
+                        object_name=object_name,
+                        expires=timedelta(days=7),
+                    )
+            except Exception as hat_report_err:
+                print(f"[WARN] Failed to save HAT structured report: {hat_report_err}")
+
         # 生成 Allure HTML 报告（如果有 allure-results 目录）
         allure_report_url = None
         allure_minio_path = None
         try:
-            allure_results_dir = WORKSPACE_DIR / "allure-results"
-            if allure_results_dir.exists() and any(allure_results_dir.iterdir()):
+            allure_candidates = [
+                get_hat_home() / "allure-results",
+                get_api_workspace_root() / "allure-results",
+            ]
+            allure_results_dir = None
+            for candidate in allure_candidates:
+                if candidate.exists() and any(candidate.iterdir()):
+                    allure_results_dir = candidate
+                    break
+            if allure_results_dir:
                 import shutil
+                sanitize_allure_results_dir(allure_results_dir, sensitive_urls)
                 timestamp_ts = int(datetime.now().timestamp())
-                allure_report_dir = WORKSPACE_DIR / f"allure-report-{timestamp_ts}"
+                allure_report_dir = get_api_workspace_root() / f"allure-report-{timestamp_ts}"
 
-                # 生成 HTML 报告
+                allure_cmd = build_allure_generate_argv(allure_results_dir, allure_report_dir)
                 proc_allure = await asyncio.create_subprocess_exec(
-                    "allure", "generate", str(allure_results_dir),
-                    "-o", str(allure_report_dir), "--clean",
+                    *allure_cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
-                await asyncio.wait_for(proc_allure.communicate(), timeout=60)
+                allure_stdout, allure_stderr = await asyncio.wait_for(
+                    proc_allure.communicate(), timeout=60
+                )
+                if proc_allure.returncode != 0:
+                    print(
+                        "[WARN] Allure generate failed: "
+                        f"rc={proc_allure.returncode}, "
+                        f"stderr={allure_stderr.decode('utf-8', errors='replace')[:500]}"
+                    )
 
-                if allure_report_dir.exists():
+                if allure_report_dir.exists() and (allure_report_dir / "index.html").exists():
                     # 打包为 zip
                     timestamp_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    zip_path = WORKSPACE_DIR / f"allure-report-{timestamp_str}.zip"
+                    zip_path = get_api_workspace_root() / f"allure-report-{timestamp_str}.zip"
                     shutil.make_archive(str(zip_path.with_suffix('')), 'zip', str(allure_report_dir))
                     if zip_path.exists():
                         # 上传到 MinIO
@@ -397,6 +532,7 @@ async def run_tests(
             result["allure_report_url"] = allure_report_url
             result["allure_minio_path"] = allure_minio_path
 
+        result = mask_agent_payload(result, sensitive_urls)
         return json.dumps(result, ensure_ascii=False, indent=2)
 
     except asyncio.TimeoutError:
@@ -409,6 +545,9 @@ async def run_tests(
             "success": False,
             "error": f"测试执行失败: {str(e)}\n{traceback.format_exc()}"
         }, ensure_ascii=False, indent=2)
+    finally:
+        if temp_hat_root:
+            shutil.rmtree(temp_hat_root, ignore_errors=True)
 
 
 @tool
@@ -475,17 +614,21 @@ async def run_test_suite(
 
 @tool
 async def parse_test_results(
-    result_output: str
+    result_output: str,
+    project_identifier: str = "",
 ) -> str:
     """
     解析测试输出并提取关键信息
 
     Args:
         result_output: 测试运行的原始输出
+        project_identifier: 项目标识符，用于脱敏输出中的环境 URL
 
     Returns:
         JSON 格式的解析结果
     """
+    sensitive_urls = await resolve_project_sensitive_urls(project_identifier)
+    result_output = mask_sensitive_urls(result_output, sensitive_urls)
     try:
         # 尝试解析 JSON 输出
         if result_output.strip().startswith("{"):
@@ -493,7 +636,7 @@ async def parse_test_results(
             return json.dumps({
                 "success": True,
                 "parsed": True,
-                "data": data
+                "data": mask_agent_payload(data, sensitive_urls)
             }, ensure_ascii=False, indent=2)
 
         # 解析文本输出

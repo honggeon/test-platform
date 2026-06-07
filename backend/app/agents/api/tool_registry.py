@@ -7,8 +7,12 @@ API Agent 工具注册表
 3. 执行工具：测试运行和结果解析（本地执行）
 4. 批量工具：批量操作的准备和协调
 
-注意：MCP 工具（api_planner, api_generator, api_healer, chart）
-在 agent.py 的 make_agent() 中异步加载，不在此处定义。
+注意：API Agent 的领域能力由 SkillsMiddleware 按需加载，对应 skill 路径：
+  - hat-test-planner   → /hat_skills/hat-test-planner   （替代原 api_planner）
+  - hat-test-generator → /hat_skills/hat-test-generator （替代原 api_generator）
+  - hat-test-healer    → /hat_skills/hat-test-healer    （替代原 api_healer）
+  - hat-test-reporter  → /hat_skills/hat-test-reporter  （替代原 chart）
+上述 skill 由 agent.py 中 SkillsMiddleware 加载，不在此处定义。
 """
 """
 版权所有 (c) 2023-2026 北京慧测信息技术有限公司(但问智能) 保留所有权利。
@@ -45,8 +49,12 @@ from app.agents.api.tools.test_artifacts_tools import (
     save_test_plan,
     save_test_cases,
     save_test_script,
+    deploy_hat_case,
+    deploy_hat_scenario,
+    deploy_hat_keyword,
     get_endpoint_artifacts,
-    get_artifact_content
+    get_artifact_content,
+    list_hat_case_dirs,
 )
 
 
@@ -162,6 +170,8 @@ def get_local_tools() -> List[BaseTool]:
         save_test_plan,
         save_test_cases,
         save_test_script,
+        deploy_hat_case,
+        deploy_hat_keyword,
         get_endpoint_artifacts,
         get_artifact_content,
 
@@ -224,6 +234,8 @@ ARTIFACT_TOOLS = [
     save_test_plan,
     save_test_cases,
     save_test_script,
+    deploy_hat_case,
+    deploy_hat_keyword,
     get_endpoint_artifacts,
     get_artifact_content,
 ]

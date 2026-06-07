@@ -1,0 +1,51 @@
+基础配置: #固定的key
+  用例类型: ApiCase  #WebCase AppCase  ApiCase
+  用例标题: 登录测试用例
+  一级模块: 登陆模块  #把登陆相关的放在一个模块中  把扩展相关的放在一个模块里面
+  二级模块: 登陆功能
+
+
+前置脚本: ""
+
+后置脚本: ""
+
+用例步骤:
+- 发送登录接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}/index.php"  #加不加index.php对于这个商城项目接口都可以  如果加可以在后面加个/index.php
+    URL参数:
+      s: /api/user/login
+      application: app
+      application_client_type: weixin
+    请求数据:
+      accounts: "{{username}}"
+      pwd: "{{password}}"
+      type: "username"
+
+
+- 提取响应数据msg:  #接口返回的实际结果
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_data
+
+- 断言响应数据MSG:
+    操作类型: 断言文本相等
+    期望结果: "{{expected}}"
+    实际结果: "{{msg_data}}"
+
+
+数据驱动:
+  - 描述标题: 正确用户名
+    username: "youyi"
+    password: "123456"
+    expected: "登录成功"
+
+  - 描述标题: 用户名不存在
+    username: "yousan"
+    password: "123456"
+    expected: "登录帐号不存在"
+
+  - 描述标题: 用户名和密码都错误
+    username: "yousan"
+    password: "1234564"
+    expected: "登录帐号不存在"

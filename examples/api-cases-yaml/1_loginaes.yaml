@@ -1,0 +1,36 @@
+基础配置:  #后续测试报告中显示
+  用例类型: ApiCase
+  用例标题: 登录加密用例标题
+  一级模块: 加密模块
+  二级模块: 加密功能
+
+前置脚本: ""
+
+后置脚本: ""
+
+
+
+用例步骤:
+- 数据加密-用户名:
+    操作类型: 加密aes
+    data: 'tony'
+    VARNAME: aes_username
+
+- 数据加密-密码:
+    操作类型: 加密aes
+    data: '123456'
+    VARNAME: aes_pwd
+
+- 发送登录接口:
+    操作类型: 发送请求POST
+    请求地址: http://127.0.0.1:8080/login_safe
+    请求数据:
+      username: "{{aes_username}}"
+      password: "{{aes_pwd}}"
+
+
+- 提取响应数据token:
+    操作类型: 提取数据JSON
+    表达式: $..token
+    变量名: msg_token
+

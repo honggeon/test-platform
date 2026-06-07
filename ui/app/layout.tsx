@@ -8,21 +8,15 @@
  */
 
 import type { Metadata } from "next";
-import { Plus_Jakarta_Sans } from "next/font/google";
 import { NuqsAdapter } from "nuqs/adapters/next/app";
 import { Toaster } from "sonner";
 import { LanguageProvider } from "@/providers/LanguageProvider";
+import { AuthProvider } from "@/providers/AuthProvider";
 import { DiagnosisToastListener } from "@/components/diagnosis/DiagnosisToastListener";
 import "./globals.css";
 
-const plusJakartaSans = Plus_Jakarta_Sans({
-  subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
-  variable: "--font-sans",
-});
-
 export const metadata: Metadata = {
-  title: "宏革智能测试平台",
+  title: "玄鉴智能测试平台",
   description: "AI 驱动的智能测试系统",
 };
 
@@ -33,9 +27,11 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="zh-CN" suppressHydrationWarning>
-      <body className={plusJakartaSans.className} suppressHydrationWarning>
+      <body className="font-sans text-base" suppressHydrationWarning>
         <LanguageProvider>
-          <NuqsAdapter>{children}</NuqsAdapter>
+          <AuthProvider>
+            <NuqsAdapter>{children}</NuqsAdapter>
+          </AuthProvider>
           <Toaster />
           <DiagnosisToastListener />
         </LanguageProvider>
@@ -43,4 +39,3 @@ export default function RootLayout({
     </html>
   );
 }
-

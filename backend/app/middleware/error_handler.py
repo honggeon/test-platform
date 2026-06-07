@@ -116,13 +116,15 @@ def setup_exception_handlers(app: FastAPI) -> None:
         request: Request, exc: Exception
     ) -> JSONResponse:
         """处理未捕获的异常"""
-        # 在生产环境中应该记录日志
+        import traceback
+        print(f"[ERROR] 未捕获异常: {type(exc).__name__}: {exc}")
+        traceback.print_exc()
         response = ErrorResponse(
             success=False,
             error="internal_server_error",
             message="服务器内部错误，请稍后重试",
         )
-        
+
         return JSONResponse(
             status_code=500,
             content=response.model_dump(exclude_none=True),

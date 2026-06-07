@@ -1,0 +1,56 @@
+基础配置:  #后续测试报告中显示
+  用例类型: ApiCase
+  用例标题: 登录用例标题
+  一级模块: 登录模块
+  二级模块: 登录功能
+
+前置脚本: ""
+后置脚本: ""
+
+
+用例步骤:
+- 发送登录接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}"
+    URL参数:
+      s: /api/user/login
+      application: app
+      application_client_type: weixin
+    请求数据:
+      accounts: "{{uname}}"
+      pwd: "{{pwd}}"
+      type: "username"
+
+- 提取响应数据msg:  #实际结果
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: sj_msg
+
+- 断言响应数据:  #预期结果和实际结果对比  assert 预期结果>实际结果，"错误时显示信息"
+    操作类型: 断言文本
+    期望结果: '{{expected}}'
+    实际结果: "{{sj_msg}}"
+    比较符: ==
+
+
+
+数据驱动:
+  - 描述标题: 正确用户名和密码
+    uname: youyi
+    pwd: 123456
+    expected: 登录成功
+
+  - 描述标题: 错误用户名和密码
+    uname: yyouyi
+    pwd: 1234567
+    expected: "登录帐号不存在"
+
+  - 描述标题: 错误用户名和正确的密码
+    uname: yyouyi
+    pwd: 123456
+    expected: "登录帐号不存在"
+
+
+
+
+

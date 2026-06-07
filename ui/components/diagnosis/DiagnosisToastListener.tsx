@@ -29,7 +29,9 @@ export function DiagnosisToastListener() {
           label: "查看",
           onClick: () => {
             if (projectId) {
-              router.push(`/projects/${projectId}/diagnosis`);
+              router.push(
+                `/projects/${projectId}/diagnosis?reportId=${payload.report_id}`
+              );
             }
           },
         },

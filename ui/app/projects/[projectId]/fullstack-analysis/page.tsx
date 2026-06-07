@@ -442,6 +442,7 @@ export default function FullStackAnalysisPage() {
       const res = await getCodeRepoStatus(projectId);
       if (res.success && res.data) {
         setRepoStatus(res.data);
+        setAnalyzing(!!res.data.analyzing);
         if (res.data.repo_url) setRepoUrl(res.data.repo_url);
         if (res.data.repo_branch) setRepoBranch(res.data.repo_branch);
         if (res.data.analyzed && res.data.message) {
@@ -510,23 +511,26 @@ export default function FullStackAnalysisPage() {
 
   // ── 分析轮询 ──
   React.useEffect(() => {
-    if (!repoStatus?.analyzing) return;
+    if (!analyzing && !repoStatus?.analyzing) return;
     const interval = setInterval(async () => {
       try {
         const res = await getCodeRepoStatus(projectId);
         if (res.success && res.data) {
           setRepoStatus(res.data);
-          if (res.data.analyzed && res.data.message) {
+          if (res.data.analyzed && res.data.message && !res.data.message.includes("失败")) {
             parseStatsFromMessage(res.data.message);
           }
-          if (!res.data.analyzing) {
+          if (res.data.current_step === "失败") {
+            setError(res.data.message || "分析失败");
+            setAnalyzing(false);
+          } else if (!res.data.analyzing) {
             setAnalyzing(false);
           }
         }
       } catch {}
     }, 2000);
     return () => clearInterval(interval);
-  }, [repoStatus?.analyzing, projectId]);
+  }, [analyzing, repoStatus?.analyzing, projectId, parseStatsFromMessage]);
 
   // ── 仓库操作 ──
   const handleSaveConfig = async () => {
@@ -546,10 +550,18 @@ export default function FullStackAnalysisPage() {
     setAnalyzing(true);
     setError("");
     try {
+      // 先保存仓库配置，再触发分析
+      await configureCodeRepo(projectId, {
+        repo_url: repoUrl.trim(), repo_branch: repoBranch || "main",
+      });
       const res = await triggerCodeAnalysis(projectId);
-      if (res.success) setRepoStatus(res.data);
+      if (res.success) {
+        setRepoStatus(res.data);
+        setAnalyzing(!!res.data.analyzing);
+      }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "分析失败");
+      setAnalyzing(false);
     }
   };
 

@@ -76,10 +76,11 @@ interface APITestListProps {
   onEditAPITest: (apiTest: APITest) => void;
   onDeleteAPITest: (apiTest: APITest) => void;
   onBulkDelete?: () => void;
+  onBulkRun?: () => void;
   onViewAPITest: (apiTest: APITest) => void;
   onRunAPITest: (apiTest: APITest) => void;
   onAIGenerate?: () => void;
-  onAPIParse?: () => void;  // 新增：API 解析回调
+  onAPIParse?: () => void;
   onOpenAIChat?: () => void;
   aiChatOpen?: boolean;
   folderName?: string;
@@ -109,10 +110,11 @@ export function APITestList({
   onEditAPITest,
   onDeleteAPITest,
   onBulkDelete,
+  onBulkRun,
   onViewAPITest,
   onRunAPITest,
   onAIGenerate,
-  onAPIParse,  // 新增
+  onAPIParse,
   onOpenAIChat,
   aiChatOpen,
   folderName,
@@ -365,18 +367,23 @@ export function APITestList({
           <span className="text-sm text-muted-foreground">
             已选择 {selectedIds.size} 项
           </span>
-          <Button variant="outline" size="sm">
-            批量运行
-          </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
-            onClick={onBulkDelete}
-          >
-            <Trash2 className="mr-2 h-4 w-4" />
-            批量删除
-          </Button>
+          {onBulkRun && (
+            <Button variant="outline" size="sm" onClick={onBulkRun}>
+              <Play className="mr-2 h-4 w-4" />
+              批量运行
+            </Button>
+          )}
+          {onBulkDelete && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={onBulkDelete}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
+          )}
         </div>
       )}
 

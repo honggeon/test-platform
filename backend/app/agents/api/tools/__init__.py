@@ -24,8 +24,12 @@ from .test_artifacts_tools import (
     save_test_plan,
     save_test_cases,
     save_test_script,
+    deploy_hat_case,
+    deploy_hat_scenario,
+    deploy_hat_keyword,
     get_endpoint_artifacts,
     get_artifact_content,
+    list_hat_case_dirs,
 )
 
 from .test_execution_tools import (
@@ -74,8 +78,12 @@ __all__ = [
     "save_test_plan",
     "save_test_cases",
     "save_test_script",
+    "deploy_hat_case",
+    "deploy_hat_scenario",
+    "deploy_hat_keyword",
     "get_endpoint_artifacts",
     "get_artifact_content",
+    "list_hat_case_dirs",
 
     # 测试执行工具
     "run_tests",

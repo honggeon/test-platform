@@ -27,6 +27,7 @@ from uuid import UUID, uuid4
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.utils.allure_report import build_allure_generate_argv
 from app.models.api_test import APITest, APITestRun, APITestResult
 from app.repositories.api_test_repo import (
     APITestRepository,
@@ -423,11 +424,16 @@ export default defineConfig({{
 
             # 生成 HTML 报告到临时目录
             allure_report_dir = work_dir / "allure-report"
-            subprocess.run(
-                ["allure", "generate", str(allure_results_dir), "-o", str(allure_report_dir), "--clean"],
+            allure_cmd = build_allure_generate_argv(allure_results_dir, allure_report_dir)
+            allure_proc = subprocess.run(
+                allure_cmd,
                 capture_output=True,
-                timeout=30
+                timeout=30,
             )
+            if allure_proc.returncode != 0:
+                stderr = allure_proc.stderr.decode("utf-8", errors="replace")[:500]
+                print(f"Allure generate 失败: rc={allure_proc.returncode}, stderr={stderr}")
+                return None
 
             # 将报告打包为 ZIP 并上传到 MinIO
             import zipfile

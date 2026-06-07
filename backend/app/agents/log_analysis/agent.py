@@ -32,17 +32,18 @@ from langchain.chat_models import init_chat_model
 from langgraph.pregel import Pregel
 
 from app.agents.log_analysis.tools import get_log_analysis_tools
+from app.config.settings import settings
 from app.utils.filesystem import FixedFilesystemBackend
 
 # =============================================================================
 # 后端配置
 # =============================================================================
 
-_skills_root = Path("backend/app/agents/log_analysis/agent_skills").resolve()
-skills_backend = FixedFilesystemBackend(root_dir=_skills_root, virtual_mode=True)
+skills_root = Path(settings.log_analysis_skills_root).resolve()
+skills_backend = FixedFilesystemBackend(root_dir=skills_root, virtual_mode=True)
 
-_workspace_root = Path("backend/workspace/diagnosis").resolve()
-workspace_backend = FixedFilesystemBackend(root_dir=_workspace_root, virtual_mode=True)
+workspace_root = Path(settings.log_analysis_workspace_root).resolve()
+workspace_backend = FixedFilesystemBackend(root_dir=workspace_root, virtual_mode=True)
 
 
 # =============================================================================
@@ -105,7 +106,7 @@ async def make_agent(config=None) -> AsyncIterator[Pregel]:
         model=model,
         tools=all_tools,
         system_prompt=SYSTEM_PROMPT,
-        middleware=[SkillsMiddleware(backend=skills_backend, sources=["/skills/"])],
+        middleware=[SkillsMiddleware(backend=skills_backend, sources=["/"])],
         backend=workspace_backend,
         context_schema=LogAnalysisContext,
     )

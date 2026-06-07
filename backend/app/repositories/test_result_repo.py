@@ -116,6 +116,24 @@ class TestResultRepository:
         
         return list(result.scalars().all()), count_result.scalar() or 0
     
+    async def get_latest_by_test_case_ids(
+        self,
+        test_case_ids: list[UUID],
+    ) -> dict[UUID, TestResult]:
+        """批量获取每个测试用例最近一次的测试结果"""
+        if not test_case_ids:
+            return {}
+
+        stmt = (
+            select(TestResult)
+            .where(TestResult.test_case_id.in_(test_case_ids))
+            .order_by(TestResult.test_case_id, TestResult.created_at.desc())
+            .distinct(TestResult.test_case_id)
+        )
+        result = await self.session.execute(stmt)
+        rows = result.scalars().all()
+        return {row.test_case_id: row for row in rows}
+
     async def get_latest(
         self,
         test_run_id: UUID,
@@ -140,6 +158,17 @@ class TestResultRepository:
         result = await self.session.execute(stmt)
         return result.scalar_one_or_none()
     
+    async def update_status(
+        self,
+        test_result: TestResult,
+        status: TestResultStatus,
+    ) -> TestResult:
+        """更新测试结果状态"""
+        test_result.status = status
+        await self.session.flush()
+        await self.session.refresh(test_result)
+        return test_result
+
     async def create(self, test_result: TestResult) -> TestResult:
         """创建测试结果"""
         self.session.add(test_result)

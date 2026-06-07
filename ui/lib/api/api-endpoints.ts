@@ -168,3 +168,15 @@ export async function deleteAPIEndpoint(
     `/api-endpoints/${endpointId}`
   );
 }
+
+/**
+ * 批量删除 API 端点
+ */
+export async function bulkDeleteAPIEndpoints(
+  endpointIds: string[]
+): Promise<void> {
+  return apiClient.post(
+    `/api-endpoints/bulk-delete`,
+    { endpoint_ids: endpointIds }
+  );
+}

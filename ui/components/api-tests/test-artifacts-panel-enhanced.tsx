@@ -36,6 +36,7 @@ import {
   Clock,
   FileCode,
   Globe,
+  ClipboardList,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -44,6 +45,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { MonacoCodeEditor } from "@/components/editor/MonacoCodeEditor";
+import { importTestCasesFromApi } from "@/lib/api/testCases";
 
 interface TestArtifact {
   id: string;
@@ -117,6 +119,7 @@ export function EnhancedTestArtifactsPanel({
   const [expandedTypes, setExpandedTypes] = useState<Set<string>>(
     new Set(["API_TEST_PLAN", "API_TEST_CASE", "API_TEST_SCRIPT", "API_TEST_RESULT", "API_TEST_REPORT"])
   );
+  const [importingToLibrary, setImportingToLibrary] = useState(false);
 
   // 编辑状态
   const [editingArtifact, setEditingArtifact] = useState<TestArtifact | null>(null);
@@ -231,6 +234,25 @@ export function EnhancedTestArtifactsPanel({
       loadArtifacts();
     }
   }, [endpointId, refreshTrigger]); // 添加 refreshTrigger 依赖
+
+  const handleImportToTestCaseLibrary = async () => {
+    setImportingToLibrary(true);
+    try {
+      const response = await importTestCasesFromApi(projectId, [endpointId]);
+      if (response.imported_count > 0) {
+        toast.success(response.message, {
+          description: "可在「测试用例」页面查看导入结果",
+        });
+      } else {
+        toast.error(response.message);
+      }
+    } catch (error) {
+      console.error("Import to test case library failed:", error);
+      toast.error(error instanceof Error ? error.message : "导入失败");
+    } finally {
+      setImportingToLibrary(false);
+    }
+  };
 
   // 加载脚本内容
   const loadScriptContent = async (artifact: TestArtifact) => {
@@ -527,6 +549,24 @@ export function EnhancedTestArtifactsPanel({
             {/* 内容区域 */}
             {isExpanded && (
               <div className="border-t border-border/50 p-3 space-y-2 bg-gradient-to-br from-background to-muted/20">
+                {type === "API_TEST_CASE" && (
+                  <div className="flex justify-end pb-1">
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      className="gap-2"
+                      disabled={importingToLibrary}
+                      onClick={handleImportToTestCaseLibrary}
+                    >
+                      {importingToLibrary ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        <ClipboardList className="h-4 w-4" />
+                      )}
+                      导入到测试用例库
+                    </Button>
+                  </div>
+                )}
                 {items.map((artifact) => (
                   <div
                     key={artifact.id}

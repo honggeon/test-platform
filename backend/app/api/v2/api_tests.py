@@ -16,7 +16,7 @@ API 测试管理 API
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Query, UploadFile, File, Form
+from fastapi import APIRouter, Query, UploadFile, File, Form, Body
 from fastapi.responses import Response, StreamingResponse
 
 from app.api.deps import (
@@ -394,6 +394,48 @@ async def get_test_run(
     )
 
     return SuccessResponse(data=result)
+
+
+@router.post(
+    "/bulk-delete",
+    response_model=SuccessResponse,
+    summary="批量删除 API 测试",
+    description="批量删除多个 API 测试",
+)
+async def bulk_delete_api_tests(
+    project_identifier: str,
+    service: APITestServiceDep,
+    data: dict = Body(...),
+):
+    """批量删除 API 测试"""
+    api_test_ids = data.get("api_test_ids", [])
+    result = await service.bulk_delete_api_tests(
+        project_identifier=project_identifier,
+        api_test_ids=api_test_ids,
+    )
+    return SuccessResponse(data=result, message="批量删除成功")
+
+
+@router.post(
+    "/bulk-run",
+    response_model=SuccessResponse,
+    summary="批量执行 API 测试",
+    description="批量执行多个 API 测试",
+)
+async def bulk_run_api_tests(
+    project_identifier: str,
+    service: APITestServiceDep,
+    data: dict = Body(...),
+):
+    """批量执行 API 测试"""
+    api_test_ids = data.get("api_test_ids", [])
+    execution_config = data.get("execution_config")
+    result = await service.bulk_run_api_tests(
+        project_identifier=project_identifier,
+        api_test_ids=api_test_ids,
+        execution_config=execution_config,
+    )
+    return SuccessResponse(data=result, message="批量执行已启动")
 
 
 @router.get(

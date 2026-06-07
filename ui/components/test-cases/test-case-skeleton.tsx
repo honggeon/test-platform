@@ -72,6 +72,9 @@ export function TableRowSkeleton({
             <Skeleton className="h-5 w-16 rounded-full" />
           </td>
           <td className="p-3">
+            <Skeleton className="h-5 w-16 rounded-full" />
+          </td>
+          <td className="p-3">
             <Skeleton className="h-4 w-24" />
           </td>
           <td className="p-3">

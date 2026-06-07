@@ -59,7 +59,7 @@ export function AnalysisSummary({
     const load = async () => {
       setLoading(true);
       try {
-        const res = await getGraphData(projectId, 2000, 2000);
+        const res = await getGraphData(projectId, 1000, 2000);
         if (res.success && res.data) {
           const counts: Record<string, number> = {};
           for (const n of res.data.nodes) {

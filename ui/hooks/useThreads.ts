@@ -10,6 +10,7 @@
 import useSWRInfinite from "swr/infinite";
 import type { Thread } from "@langchain/langgraph-sdk";
 import { Client } from "@langchain/langgraph-sdk";
+import { getAuthHeaders } from "@/lib/auth";
 import { getConfig } from "@/lib/langgraph/config";
 
 export interface ThreadItem {
@@ -74,7 +75,10 @@ export function useThreads(props: {
     }) => {
       const client = new Client({
         apiUrl: deploymentUrl,
-        defaultHeaders: apiKey ? { "X-Api-Key": apiKey } : {},
+        defaultHeaders: {
+          ...(apiKey ? { "X-Api-Key": apiKey } : {}),
+          ...getAuthHeaders(),
+        },
       });
 
       // Check if assistantId is a UUID (deployed) or graph name (local)

@@ -62,12 +62,16 @@ async def list_environments(
                 "environments": [
                     {
                         "name": env.name,
-                        "base_url": env.base_url,
+                        "base_url": "{{API_BASE_URL}}",
                         "is_default": env.is_default,
                         "description": env.description,
                     }
                     for env in envs
-                ]
+                ],
+                "note": (
+                    "base_url 已对 Agent 脱敏。执行测试时 execute_api_script / run_tests "
+                    "会自动从项目环境配置注入真实地址，请勿手动修改 context.yaml 中的占位符。"
+                ),
             }, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({
@@ -125,9 +129,13 @@ async def get_default_environment(
                 "success": True,
                 "environment": {
                     "name": env.name,
-                    "base_url": env.base_url,
+                    "base_url": "{{API_BASE_URL}}",
                     "is_default": env.is_default,
-                }
+                },
+                "note": (
+                    "base_url 已对 Agent 脱敏。执行测试时 execute_api_script / run_tests "
+                    "会自动注入真实地址，请勿手动修改 context.yaml 中的 {{API_BASE_URL}}。"
+                ),
             }, ensure_ascii=False, indent=2)
     except Exception as e:
         return json.dumps({

@@ -1,0 +1,29 @@
+---
+description: FastAPI 后端分层与测试约定
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# 后端约定
+
+## 分层
+
+- `api/`：路由与请求校验，不写复杂业务逻辑
+- `services/`：业务编排
+- `repositories/`：数据库访问
+- `models/`：SQLAlchemy ORM；`schemas/`：Pydantic DTO
+- `agents/`：LangGraph / Agent 与工具注册
+
+## 修改时注意
+
+- 新增 ORM 模型时，在 `main.py` 按外键依赖顺序显式 import（见现有 import 块注释）
+- API 统一前缀 `/api/v2`，新路由挂到 `backend/app/api/__init__.py`
+- 环境变量在 `backend/app/.env`（勿提交密钥）；读取用 `app.config.settings`
+
+## 测试
+
+```bash
+.venv/bin/python -m pytest backend/tests -q
+```
+
+异步测试需 `pytest-asyncio` 并已注册 `asyncio` mark。改 diagnosis / A2A 相关代码后务必跑对应测试文件。

@@ -11,6 +11,8 @@
 
 import { createContext, useContext, useMemo, ReactNode } from "react";
 import { Client } from "@langchain/langgraph-sdk";
+import { getAuthHeaders } from "@/lib/auth";
+import { getDeploymentUrl } from "@/lib/langgraph/config";
 
 interface ClientContextValue {
   client: Client;
@@ -20,24 +22,24 @@ const ClientContext = createContext<ClientContextValue | null>(null);
 
 interface ClientProviderProps {
   children: ReactNode;
-  deploymentUrl: string;
   apiKey: string;
 }
 
 export function ClientProvider({
   children,
-  deploymentUrl,
   apiKey,
 }: ClientProviderProps) {
   const client = useMemo(() => {
+    const deploymentUrl = getDeploymentUrl();
     return new Client({
       apiUrl: deploymentUrl,
       defaultHeaders: {
         "Content-Type": "application/json",
         "X-Api-Key": apiKey,
+        ...getAuthHeaders(),
       },
     });
-  }, [deploymentUrl, apiKey]);
+  }, [apiKey]);
 
   const value = useMemo(() => ({ client }), [client]);
 

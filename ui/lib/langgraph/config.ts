@@ -36,10 +36,12 @@ function isInvalidLocalDevUrl(url: string): boolean {
  * 服务端渲染（SSR）时返回原始值。
  */
 function resolveApiUrl(url: string): string {
+  let resolved = url;
   if (typeof window !== "undefined" && url.startsWith("/")) {
-    return window.location.origin + url;
+    resolved = window.location.origin + url;
   }
-  return url;
+  // LangGraph SDK 要求 apiUrl 以 / 结尾，否则拼接路径时会丢失最后一级路径（如 /lg）
+  return resolved.endsWith("/") ? resolved : resolved + "/";
 }
 
 /**

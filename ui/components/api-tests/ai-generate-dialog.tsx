@@ -60,8 +60,8 @@ export function AIGenerateAPITestDialog({
   const [schemaUrl, setSchemaUrl] = useState("");
   const [schemaFile, setSchemaFile] = useState<File | null>(null);
   const [prompt, setPrompt] = useState(""); // 新增：用户输入的功能描述
-  const [scriptFormat, setScriptFormat] = useState("playwright");
-  const [scriptLanguage, setScriptLanguage] = useState("typescript");
+  const [scriptFormat, setScriptFormat] = useState("hat");
+  const [scriptLanguage, setScriptLanguage] = useState("yaml");
   const [uploading, setUploading] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [schemaPath, setSchemaPath] = useState("");
@@ -73,8 +73,8 @@ export function AIGenerateAPITestDialog({
     setSchemaUrl("");
     setSchemaFile(null);
     setPrompt(""); // 重置提示词
-    setScriptFormat("playwright");
-    setScriptLanguage("typescript");
+    setScriptFormat("hat");
+    setScriptLanguage("yaml");
     setUploading(false);
     setGenerating(false);
     setSchemaPath("");
@@ -100,30 +100,21 @@ export function AIGenerateAPITestDialog({
 
     // 如果提供了 onOpenChat 回调，使用聊天界面
     if (onOpenChat) {
-      const chatPrompt = `请按照以下流程为 API 生成测试：
+      const chatPrompt = `请为当前项目生成 API 测试。
 
-📋 第一步：生成测试计划
-使用 api_planner 工具：
-- 分析 API 端点和参数
-- 制定测试策略
-- 生成测试计划文档
+📋 工作流程：
+1. **获取端点信息** → 使用 \`get_endpoint_details\` 或 \`list_api_endpoints\` 工具获取已解析的 API 端点信息（端点数据已在平台数据库中，无需自行抓取 schema）
+2. **生成测试计划** → 参考 hat-test-planner（含「生成指引」认证配置），\`save_test_plan\` 保存
+3. **生成 HAT 脚本** → hat-test-generator：\`基础配置\`+\`用例步骤\`，文件 \`0_*.yaml\`；Bearer 须 \`0_login.yaml\` 或 context \`{{AUTH_TOKEN}}\`；\`deploy_hat_case\` 部署
+4. **保存元数据** → \`save_test_script(script_format="hat")\`
+5. **执行测试** → \`execute_api_script(framework="hat")\` 指向 deploy 返回的用例目录
 
-💻 第二步：生成测试代码
-使用 api_generator 工具：
-- 根据计划生成测试脚本
-- 支持格式：${scriptFormat}
-- 语言：${scriptLanguage}
+⚠️ 重要提醒：
+- 端点信息已经通过平台 API 解析完成，**不要**自行运行任何命令去获取 schema
+- 直接使用平台提供的 \`get_endpoint_details\` / \`list_api_endpoints\` 工具获取端点数据
+- 严格按照工具职责执行，不得混淆使用
 
-💾 第三步：保存成果物
-使用 save_test_plan 和 save_test_script 保存
-
-Schema 来源：${schemaSource === "url" ? "URL" : "文件"}
-${schemaSource === "url" ? `Schema URL: ${schemaUrl}` : `文件: ${schemaFile?.name}`}
-${prompt.trim() ? `
-📝 特殊要求：
-${prompt.trim()}` : ""}
-
-⚠️ 重要：严格按照工具职责执行，不得混淆使用！`;
+${prompt.trim() ? `📝 特殊要求：${prompt.trim()}` : ""}`;
 
       onOpenChat(chatPrompt);
       resetForm();
@@ -354,6 +345,7 @@ ${prompt.trim()}` : ""}
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="hat">HAT</SelectItem>
                     <SelectItem value="playwright">Playwright</SelectItem>
                   </SelectContent>
                 </Select>
@@ -365,6 +357,7 @@ ${prompt.trim()}` : ""}
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
+                    <SelectItem value="yaml">YAML</SelectItem>
                     <SelectItem value="typescript">TypeScript</SelectItem>
                     <SelectItem value="javascript">JavaScript</SelectItem>
                   </SelectContent>

@@ -68,13 +68,19 @@ export const ChatMessage = React.memo<ChatMessageProps>(
           const subagentType = (toolCall.args as Record<string, unknown>)[
             "subagent_type"
           ] as string;
+          const subStatus =
+            toolCall.status === "completed"
+              ? "completed"
+              : toolCall.status === "error"
+                ? "error"
+                : "active";
           return {
             id: toolCall.id,
             name: toolCall.name,
             subAgentName: subagentType,
             input: toolCall.args,
             output: toolCall.result ? { result: toolCall.result } : undefined,
-            status: toolCall.status,
+            status: subStatus,
           } as SubAgent;
         });
     }, [toolCalls]);

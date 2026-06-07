@@ -36,6 +36,7 @@ interface APIParseDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   projectIdentifier: string;
+  parentFolderId?: string | null;
   onSuccess?: () => void;
 }
 
@@ -46,6 +47,7 @@ export function APIParseDialog({
   open,
   onOpenChange,
   projectIdentifier,
+  parentFolderId,
   onSuccess,
 }: APIParseDialogProps) {
   const [currentStep, setCurrentStep] = useState<Step>("input");
@@ -123,7 +125,7 @@ export function APIParseDialog({
         },
         body: JSON.stringify({
           project_identifier: projectIdentifier,
-          parent_folder_id: null,
+          parent_folder_id: parentFolderId || null,
           file_content: fileContent,
           create_structure: true,
         }),

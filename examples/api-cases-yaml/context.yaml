@@ -1,0 +1,22 @@
+#文件不仅仅放地址  动态的数据 都可以放在里面
+URL: "http://shop-xo.hctestedu.com"
+URL1: "http://shop-xo.hctestedu.com"
+session_reuse: False   #session复用
+key_dir: ./HAT/key_dir
+
+
+_数据库:
+  电商数据库:
+    host: shop-xo.hctestedu.com
+    port: 3306
+    user: api_test
+    password: Aa9999!
+    db: shopxo_hctested
+
+  读书屋数据库:
+    host: shop-xo.hctestedu.com
+    port: 3306
+    user: api_test
+    password: Aa9999!
+    db: shopxo_hctested
+

@@ -23,9 +23,13 @@ import {
   MoreVertical,
   Trash2,
   Edit,
+  Play,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -42,7 +46,7 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
-import { listScenarios, deleteScenario } from "@/lib/api/scenarios";
+import { listScenarios, deleteScenario, bulkDeleteScenarios, bulkRunScenarios } from "@/lib/api/scenarios";
 import { useLanguage } from "@/providers/LanguageProvider";
 import type { Scenario } from "@/types/scenario";
 
@@ -51,6 +55,7 @@ interface ScenarioListPanelProps {
   selectedScenarioId: string | null;
   onSelectScenario: (scenarioId: string) => void;
   refreshTrigger?: number;
+  onRefresh?: () => void;
 }
 
 export function ScenarioListPanel({
@@ -58,23 +63,45 @@ export function ScenarioListPanel({
   selectedScenarioId,
   onSelectScenario,
   refreshTrigger,
+  onRefresh,
 }: ScenarioListPanelProps) {
   const { t } = useLanguage();
   const [scenarios, setScenarios] = React.useState<Scenario[]>([]);
+  const [filteredScenarios, setFilteredScenarios] = React.useState<Scenario[]>([]);
   const [loading, setLoading] = React.useState(true);
+  const [searchQuery, setSearchQuery] = React.useState("");
+  const [selectedIds, setSelectedIds] = React.useState<Set<string>>(new Set());
   const [deleteDialogOpen, setDeleteDialogOpen] = React.useState(false);
   const [deletingScenario, setDeletingScenario] = React.useState<Scenario | null>(null);
+  const [bulkDeleteDialogOpen, setBulkDeleteDialogOpen] = React.useState(false);
 
   // 加载场景列表
   React.useEffect(() => {
     loadScenarios();
   }, [projectId, refreshTrigger]);
 
+  // 搜索过滤
+  React.useEffect(() => {
+    if (!searchQuery.trim()) {
+      setFilteredScenarios(scenarios);
+      return;
+    }
+    const query = searchQuery.toLowerCase();
+    const filtered = scenarios.filter(
+      (s) =>
+        s.name.toLowerCase().includes(query) ||
+        s.identifier.toLowerCase().includes(query) ||
+        (s.description && s.description.toLowerCase().includes(query))
+    );
+    setFilteredScenarios(filtered);
+  }, [searchQuery, scenarios]);
+
   const loadScenarios = async () => {
     try {
       setLoading(true);
       const result = await listScenarios(projectId, { page: 1, page_size: 100 });
       setScenarios(result.items);
+      setFilteredScenarios(result.items);
     } catch (error) {
       console.error("Failed to load scenarios:", error);
       toast.error(t("scenarioTests.scenarioListLoadFailed"));
@@ -92,9 +119,56 @@ export function ScenarioListPanel({
       setScenarios(scenarios.filter((s) => s.id !== deletingScenario.id));
       setDeleteDialogOpen(false);
       setDeletingScenario(null);
+      if (onRefresh) onRefresh();
     } catch (error) {
       console.error("Failed to delete scenario:", error);
       toast.error(t("scenarioTests.scenarioDeleteFailed"));
+    }
+  };
+
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds(new Set(filteredScenarios.map((s) => s.id)));
+    } else {
+      setSelectedIds(new Set());
+    }
+  };
+
+  const handleSelect = (id: string, checked: boolean) => {
+    const newIds = new Set(selectedIds);
+    if (checked) {
+      newIds.add(id);
+    } else {
+      newIds.delete(id);
+    }
+    setSelectedIds(newIds);
+  };
+
+  const handleBulkDelete = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      await bulkDeleteScenarios(Array.from(selectedIds));
+      toast.success(`已删除 ${selectedIds.size} 个场景`);
+      setSelectedIds(new Set());
+      loadScenarios();
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error("Failed to bulk delete scenarios:", error);
+      toast.error("批量删除失败");
+    }
+    setBulkDeleteDialogOpen(false);
+  };
+
+  const handleBulkRun = async () => {
+    if (selectedIds.size === 0) return;
+    try {
+      await bulkRunScenarios(Array.from(selectedIds));
+      toast.success(`已启动 ${selectedIds.size} 个场景的执行`);
+      setSelectedIds(new Set());
+      if (onRefresh) onRefresh();
+    } catch (error) {
+      console.error("Failed to bulk run scenarios:", error);
+      toast.error("批量执行失败");
     }
   };
 
@@ -141,6 +215,9 @@ export function ScenarioListPanel({
     }
   };
 
+  const isAllSelected =
+    filteredScenarios.length > 0 && selectedIds.size === filteredScenarios.length;
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-full p-4">
@@ -163,82 +240,150 @@ export function ScenarioListPanel({
 
   return (
     <>
-      <div className="h-full overflow-y-auto">
-      <div className="divide-y">
-        {scenarios.map((scenario) => (
-          <div
-            key={scenario.id}
-            className={`p-4 hover:bg-muted/50 cursor-pointer transition-colors ${
-              selectedScenarioId === scenario.id ? "bg-muted" : ""
-            }`}
-            onClick={() => onSelectScenario(scenario.id)}
-          >
-            <div className="flex items-start justify-between gap-2">
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-mono text-muted-foreground">
-                    {scenario.identifier}
-                  </span>
-                  {getStatusBadge(scenario)}
-                </div>
-                <h4 className="font-medium text-sm truncate">{scenario.name}</h4>
-                {scenario.description && (
-                  <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
-                    {scenario.description}
-                  </p>
-                )}
-                <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
-                  <span>{scenario.total_steps}{t("scenarioTests.stepsCount")}</span>
-                  {scenario.last_run_at && (
-                    <span>
-                      {new Date(scenario.last_run_at).toLocaleString()}
-                    </span>
-                  )}
-                </div>
-                {getLastRunBadge(scenario)}
-              </div>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="h-8 w-8 p-0"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    <MoreVertical className="h-4 w-4" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      onSelectScenario(scenario.id);
-                    }}
-                  >
-                    <Edit className="mr-2 h-4 w-4" />
-                    {t("scenarioTests.edit")}
-                  </DropdownMenuItem>
-                  <DropdownMenuItem
-                    className="text-destructive"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setDeletingScenario(scenario);
-                      setDeleteDialogOpen(true);
-                    }}
-                  >
-                    <Trash2 className="mr-2 h-4 w-4" />
-                    {t("scenarioTests.delete")}
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-            </div>
+      <div className="h-full flex flex-col">
+        {/* 搜索栏 */}
+        <div className="p-3 border-b">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              placeholder="搜索场景..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="pl-9"
+            />
           </div>
-        ))}
-      </div>
-    </div>
+        </div>
 
-    {/* 删除确认对话框 */}
+        {/* 批量操作栏 */}
+        {selectedIds.size > 0 && (
+          <div className="flex items-center gap-3 border-b bg-muted/50 px-4 py-2">
+            <span className="text-sm text-muted-foreground">
+              已选择 {selectedIds.size} 项
+            </span>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleBulkRun}
+            >
+              <Play className="mr-2 h-4 w-4" />
+              批量运行
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="text-destructive hover:bg-destructive hover:text-destructive-foreground"
+              onClick={() => setBulkDeleteDialogOpen(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              批量删除
+            </Button>
+          </div>
+        )}
+
+        {/* 全选标题 */}
+        <div className="px-4 py-2 border-b flex items-center gap-2">
+          <Checkbox
+            checked={isAllSelected}
+            onCheckedChange={handleSelectAll}
+            aria-label="全选"
+          />
+          <span className="text-xs text-muted-foreground">
+            {filteredScenarios.length} 个场景
+          </span>
+        </div>
+
+        {/* 场景列表 */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="divide-y">
+            {filteredScenarios.map((scenario) => (
+              <div
+                key={scenario.id}
+                className={`p-4 hover:bg-muted/50 cursor-pointer transition-colors ${
+                  selectedScenarioId === scenario.id ? "bg-muted" : ""
+                }`}
+                onClick={() => onSelectScenario(scenario.id)}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="flex items-start gap-2 flex-1 min-w-0">
+                    <div
+                      className="mt-0.5 shrink-0"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      <Checkbox
+                        checked={selectedIds.has(scenario.id)}
+                        onCheckedChange={(checked) =>
+                          handleSelect(scenario.id, checked as boolean)
+                        }
+                        aria-label={`选择 ${scenario.name}`}
+                      />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="text-xs font-mono text-muted-foreground">
+                          {scenario.identifier}
+                        </span>
+                        {getStatusBadge(scenario)}
+                      </div>
+                      <h4 className="font-medium text-sm truncate">{scenario.name}</h4>
+                      {scenario.description && (
+                        <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                          {scenario.description}
+                        </p>
+                      )}
+                      <div className="flex items-center gap-3 mt-2 text-xs text-muted-foreground">
+                        <span>{scenario.total_steps}{t("scenarioTests.stepsCount")}</span>
+                        {scenario.last_run_at && (
+                          <span>
+                            {new Date(scenario.last_run_at).toLocaleString()}
+                          </span>
+                        )}
+                      </div>
+                      {getLastRunBadge(scenario)}
+                    </div>
+                  </div>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 w-8 p-0"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <MoreVertical className="h-4 w-4" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onSelectScenario(scenario.id);
+                        }}
+                      >
+                        <Edit className="mr-2 h-4 w-4" />
+                        {t("scenarioTests.edit")}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        className="text-destructive"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setDeletingScenario(scenario);
+                          setDeleteDialogOpen(true);
+                        }}
+                      >
+                        <Trash2 className="mr-2 h-4 w-4" />
+                        {t("scenarioTests.delete")}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 删除确认对话框 */}
       <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -251,6 +396,26 @@ export function ScenarioListPanel({
             <AlertDialogCancel>{t("common.cancel")}</AlertDialogCancel>
             <AlertDialogAction onClick={handleDelete} className="bg-destructive">
               {t("scenarioTests.delete")}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* 批量删除确认对话框 */}
+      <AlertDialog open={bulkDeleteDialogOpen} onOpenChange={setBulkDeleteDialogOpen}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>确认批量删除</AlertDialogTitle>
+            <AlertDialogDescription>
+              确定要删除选中的 {selectedIds.size} 个场景吗？此操作不可恢复。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={() => setBulkDeleteDialogOpen(false)}>
+              {t("common.cancel")}
+            </AlertDialogCancel>
+            <AlertDialogAction onClick={handleBulkDelete} className="bg-destructive">
+              {t("common.delete")}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

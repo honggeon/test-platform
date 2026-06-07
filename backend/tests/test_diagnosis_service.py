@@ -212,6 +212,13 @@ class TestIdempotency:
         report3 = service._emergency_report("run-001", "error", preset_report_id="preset-789")
         assert report3.report_id == "preset-789"
 
+    def test_generate_report_uses_override_dedup_key(self, service):
+        report = service._generate_report(
+            [], {}, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0},
+            "run-001", "proj-001", preset_report_id="r1", dedup_key="custom_key",
+        )
+        assert report.dedup_key == "custom_key"
+
 
 # =============================================================================
 # 脱敏测试
@@ -385,9 +392,10 @@ class TestEndToEnd:
         mock_collection.find = MagicMock(return_value=mock_cursor)
         service.mongodb.get_collection = MagicMock(return_value=mock_collection)
 
-        # mock _save_report 和 _notify_frontend 避免实际写入
+        # mock _save_report, _notify_frontend 和 _notify_progress 避免实际写入
         service._save_report = AsyncMock()
         service._notify_frontend = AsyncMock()
+        service._notify_progress = AsyncMock()
 
         report = await service.diagnose_run("run-001", "proj-001")
         assert report.status in ("completed", "failed")

@@ -11,7 +11,7 @@
 export const translations = {
   // 元数据
   meta: {
-    title: "宏革智能测试平台",
+    title: "玄鉴智能测试平台",
     description: "AI 驱动的智能测试系统",
   },
 

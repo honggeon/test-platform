@@ -32,6 +32,12 @@ from .enums import (
     TestRunActiveState,
     TestResultStatus,
 )
+from .auth import (
+    UserRegister,
+    UserLogin,
+    UserResponse,
+    TokenResponse,
+)
 
 __all__ = [
     # 通用响应
@@ -50,6 +56,11 @@ __all__ = [
     "TestRunState",
     "TestRunActiveState",
     "TestResultStatus",
+    # 认证
+    "UserRegister",
+    "UserLogin",
+    "UserResponse",
+    "TokenResponse",
     # 测试环境
     "TestEnvironmentCreate",
     "TestEnvironmentUpdate",

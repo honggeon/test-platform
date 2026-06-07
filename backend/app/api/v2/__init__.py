@@ -13,7 +13,7 @@ API v2 模块
 """
 
 
-from . import projects, folders, test_cases, test_runs, test_results, test_plans, attachments, configurations, llm_config, api_tests, api_tests_extended, api_endpoints, scenarios, web_tests, web_functions, test_reports, code_repo, code_analysis, diagnosis
+from . import projects, folders, test_cases, test_runs, test_results, test_plans, attachments, configurations, llm_config, api_tests, api_tests_extended, api_endpoints, scenarios, web_tests, web_functions, test_reports, code_repo, code_analysis, diagnosis, a2a
 
 __all__ = [
     "projects",
@@ -32,7 +32,9 @@ __all__ = [
     "web_tests",
     "web_functions",
     "test_reports",
+    "code_repo",
     "code_analysis",
     "diagnosis",
+    "a2a",
 ]
 

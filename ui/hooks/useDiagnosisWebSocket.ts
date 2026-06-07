@@ -4,12 +4,14 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import type {
   WSServerMessage,
   WSDiagnosisCompletedPayload,
+  WSDiagnosisProgressPayload,
   WSUnreadReportsPayload,
 } from "@/types/diagnosis";
 
 interface UseDiagnosisWebSocketOptions {
   projectId: string | null;
   onDiagnosisCompleted?: (payload: WSDiagnosisCompletedPayload) => void;
+  onDiagnosisProgress?: (payload: WSDiagnosisProgressPayload) => void;
   onUnreadReports?: (payload: WSUnreadReportsPayload) => void;
   enabled?: boolean;
 }
@@ -21,7 +23,8 @@ interface UseDiagnosisWebSocketReturn {
   clearUnread: () => void;
 }
 
-const WS_BASE_URL = "ws://localhost:8000";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+const WS_BASE_URL = API_BASE_URL.replace(/^http/, "ws");
 const PING_INTERVAL = 30000;
 const RECONNECT_DELAY = 3000;
 const ACK_TIMEOUT = 3000;
@@ -29,6 +32,7 @@ const ACK_TIMEOUT = 3000;
 export function useDiagnosisWebSocket({
   projectId,
   onDiagnosisCompleted,
+  onDiagnosisProgress,
   onUnreadReports,
   enabled = true,
 }: UseDiagnosisWebSocketOptions): UseDiagnosisWebSocketReturn {
@@ -105,7 +109,7 @@ export function useDiagnosisWebSocket({
     shouldReconnectRef.current = true;
 
     try {
-      const wsUrl = `${WS_BASE_URL}/ws/diagnosis/${projectId}`;
+      const wsUrl = `${WS_BASE_URL}/api/v2/ws/diagnosis/${projectId}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
@@ -141,6 +145,11 @@ export function useDiagnosisWebSocket({
               return [...prev, ...newReports];
             });
             onUnreadReports?.(payload);
+            return;
+          }
+
+          if (data.type === "diagnosis_progress") {
+            onDiagnosisProgress?.(data as WSDiagnosisProgressPayload);
             return;
           }
 
@@ -201,7 +210,7 @@ export function useDiagnosisWebSocket({
         }
       }, RECONNECT_DELAY);
     }
-  }, [projectId, enabled, onDiagnosisCompleted, onUnreadReports, sendAck]);
+  }, [projectId, enabled, onDiagnosisCompleted, onDiagnosisProgress, onUnreadReports, sendAck]);
 
   useEffect(() => {
     if (enabled && projectId) {

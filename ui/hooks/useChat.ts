@@ -75,7 +75,8 @@ export function useChat({
     threadId: threadId ?? null,
     onThreadId: setThreadId,
     defaultHeaders: { "x-auth-scheme": "langsmith" },
-    fetchStateHistory: true,
+    // deepagents subagent checkpoint 与 history 回放存在兼容问题，关闭以避免 500
+    fetchStateHistory: false,
     // Revalidate thread list when stream finishes, errors, or creates new thread
     onFinish: handleFinish,
     onError: onHistoryRevalidate,

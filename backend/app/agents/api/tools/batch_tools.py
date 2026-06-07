@@ -32,14 +32,14 @@ async def batch_generate_tests(
     project_identifier: str,
     endpoint_ids: Optional[List[str]] = None,
     tag_group: Optional[str] = None,
-    framework: str = "playwright",
-    language: str = "typescript"
+    framework: str = "hat",
+    language: str = "yaml"
 ) -> str:
     """
     准备批量测试生成 - 查询端点并返回生成配置
 
     此工具用于准备批量生成测试的端点列表和配置。
-    返回的端点信息可用于后续调用 api_generator 逐个生成测试。
+    返回的端点信息可用于后续参考 hat-test-generator skill 逐个生成测试。
 
     Args:
         project_identifier: 项目标识符
@@ -112,8 +112,8 @@ async def batch_generate_tests(
                 },
                 "workflow": [
                     "1. 对每个端点调用 get_endpoint_details 获取详情",
-                    "2. 调用 api_planner 生成测试计划",
-                    "3. 调用 api_generator 生成测试代码",
+                    "2. 参考 hat-test-planner skill 生成测试计划",
+                    "3. 参考 hat-test-generator skill 生成测试代码",
                     "4. 调用 save_test_plan/save_test_script 保存成果物"
                 ]
             }, ensure_ascii=False, indent=2)

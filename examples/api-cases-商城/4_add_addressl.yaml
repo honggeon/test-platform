@@ -1,0 +1,37 @@
+基础配置: # 固定的KEY
+  用例类型: ApiCase # WebCase 、 ApiCase 、 AppCase
+  用例标题: 新增地址列表
+  一级模块: 地址模块
+  二级模块: 新增地址功能
+
+前置脚本: ""
+
+后置脚本: ""
+
+用例步骤: # 固定的KEY
+- 发送购物车接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}"
+    URL参数:
+      s: /api/useraddress/save
+      application: app
+      token: '{{msg_token}}'
+    请求数据:
+      name: 李文静
+      tel: 15096964646
+      province: 18
+      city: 27
+      county: 2916
+      address: 2栋403室
+
+- 提取响应数据-MSG:
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_success
+
+- 断言响应数据MSG:
+    操作类型: 断言文本
+    期望结果: 新增成功
+    实际结果: "{{msg_success}}"
+    比较符: ==
+

@@ -10,6 +10,7 @@
 
 import asyncio
 import os
+import re
 from typing import Optional
 
 from sqlalchemy import select
@@ -30,7 +31,25 @@ _analysis_progress: dict[str, dict] = {}
 
 
 def _is_local_path(path: str) -> bool:
-    return path.startswith("/") or path.startswith("~") or path.startswith(".")
+    """判断输入是否为本地文件系统路径（支持 Linux / macOS / Windows）"""
+    path = path.strip()
+    if not path or _is_git_url(path):
+        return False
+    # Unix 绝对路径、用户目录、相对路径
+    if path.startswith(("/", "~", ".")):
+        return True
+    # Windows 盘符路径: C:\ D:/ 等
+    if re.match(r"^[A-Za-z]:", path):
+        return True
+    # Windows UNC 网络路径: \\server\share
+    if path.startswith("\\\\"):
+        return True
+    return False
+
+
+def _normalize_local_path(path: str) -> str:
+    """将本地路径规范化为绝对路径"""
+    return os.path.normpath(os.path.abspath(os.path.expanduser(path.strip())))
 
 
 def _is_git_url(path: str) -> bool:
@@ -74,35 +93,43 @@ class CodeRepoService:
         if repo_path and os.path.isdir(repo_path):
             status.cloned = True
 
-        # 检查分析结果是否存在于数据库中
+        # 检查分析结果是否存在于数据库中（表可能尚未创建，容错处理）
         if repo_path:
-            persister = GraphPersistence(self.session)
-            count = await persister.get_node_count(repo_path)
-            if count > 0:
-                status.analyzed = True
+            try:
+                persister = GraphPersistence(self.session)
+                count = await persister.get_node_count(repo_path)
+                if count > 0:
+                    status.analyzed = True
+            except Exception:
+                pass
 
         # 检查进度
         key = str(project.id)
         if key in _analysis_progress:
             info = _analysis_progress[key]
-            status.analyzing = True
-            status.progress = info.get("progress", 0)
+            progress = info.get("progress", 0)
+            status.progress = max(progress, 0)
             status.current_step = info.get("step", "")
             status.message = info.get("message", "")
+            # progress=-1 表示失败；100 表示刚完成（缓存尚未清除）
+            status.analyzing = 0 <= progress < 100
         elif status.analyzed and not status.message:
             # 进度已过期但数据仍在数据库中，重建摘要
-            persister = GraphPersistence(self.session)
-            type_counts = await persister.get_type_counts(repo_path)
-            rel_count = await persister.get_relationship_count(repo_path)
-            files = type_counts.get("file", 0)
-            folders = type_counts.get("folder", 0)
-            nodes = sum(type_counts.values())
-            status.message = (
-                f"分析完成: {files} 文件, "
-                f"{folders} 目录, "
-                f"{nodes} 节点, "
-                f"{rel_count} 关系"
-            )
+            try:
+                persister = GraphPersistence(self.session)
+                type_counts = await persister.get_type_counts(repo_path)
+                rel_count = await persister.get_relationship_count(repo_path)
+                files = type_counts.get("file", 0)
+                folders = type_counts.get("folder", 0)
+                nodes = sum(type_counts.values())
+                status.message = (
+                    f"分析完成: {files} 文件, "
+                    f"{folders} 目录, "
+                    f"{nodes} 节点, "
+                    f"{rel_count} 关系"
+                )
+            except Exception:
+                pass
 
         return status
 
@@ -112,7 +139,7 @@ class CodeRepoService:
         project = await self.get_project(identifier)
         # 解析本地路径
         if _is_local_path(repo_url):
-            local_path = os.path.expanduser(repo_url)
+            local_path = _normalize_local_path(repo_url)
         else:
             name = repo_url.rstrip("/").split("/")[-1]
             if name.endswith(".git"):
@@ -124,8 +151,11 @@ class CodeRepoService:
         project.code_repo_branch = repo_branch
         await self.session.commit()
 
-        # 检查是否已有分析结果
-        count = await GraphPersistence(self.session).get_node_count(local_path)
+        # 检查是否已有分析结果（表可能尚未创建，容错处理）
+        try:
+            count = await GraphPersistence(self.session).get_node_count(local_path)
+        except Exception:
+            count = 0
 
         return CodeRepoInfo(
             repo_url=repo_url,
@@ -151,12 +181,13 @@ class CodeRepoService:
 
         # 验证路径
         if _is_local_path(input_path):
-            repo_path = os.path.expanduser(input_path)
+            repo_path = _normalize_local_path(input_path)
             if not os.path.isdir(repo_path):
                 raise ValueError(f"本地路径不存在: {repo_path}")
         elif not _is_git_url(input_path):
             raise ValueError(
-                "无法识别的路径格式，请输入 Git 仓库地址 (https://...) 或本地路径 (/home/...)"
+                "无法识别的路径格式，请输入 Git 仓库地址 (https://...) "
+                "或本地路径 (如 /home/... 或 C:\\projects\\...)"
             )
 
         project.code_repo_path = repo_path
@@ -164,12 +195,12 @@ class CodeRepoService:
 
         # 初始化进度
         _analysis_progress[key] = {"progress": 0, "step": "准备中", "message": "初始化分析..."}
-        asyncio.create_task(self._run_analysis(key, input_path, repo_path))
+        asyncio.create_task(self._run_analysis(key, identifier, input_path, repo_path))
 
         return await self.get_status(identifier)
 
     async def _run_analysis(
-        self, key: str, input_path: str, repo_path: str
+        self, key: str, identifier: str, input_path: str, repo_path: str
     ) -> None:
         """后台执行分析任务——使用原生 Python 知识图谱引擎"""
         # 后台任务使用独立的数据库会话（避免并发冲突）
@@ -257,9 +288,12 @@ class CodeRepoService:
                     commit_timestamp=commit_timestamp,
                 )
 
-                # 确保数据库索引存在
+                # 确保数据库索引存在（失败不影响已写入的图谱数据）
                 from app.kg.persistence import ensure_indexes
-                await ensure_indexes(bg_session)
+                try:
+                    await ensure_indexes(bg_session)
+                except Exception as index_err:
+                    print(f"[分析引擎] 索引创建失败（图谱数据已保存）: {index_err}")
 
                 # 更新 project.last_commit（使用 bg_session）
                 try:
@@ -297,7 +331,10 @@ class CodeRepoService:
                 import traceback
                 traceback.print_exc()
             finally:
-                await asyncio.sleep(3)
+                info = _analysis_progress.get(key, {})
+                progress = info.get("progress", 0)
+                # 成功完成后短暂保留进度；失败状态保留更久以便前端展示
+                await asyncio.sleep(2 if progress >= 0 else 30)
                 _analysis_progress.pop(key, None)
 
     # ── 辅助方法 ──────────────────────────────────────────────────────────

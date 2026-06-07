@@ -23,8 +23,24 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 from app.schemas.common import BaseResponse, LinkInfo
 from app.schemas.enums import (
     Priority, TestCaseState, TestCaseType,
-    TestCaseTemplate, AutomationStatus, BulkEditOperation, ExportStatus
+    TestCaseTemplate, AutomationStatus, BulkEditOperation, ExportStatus,
+    TestResultStatus,
 )
+
+
+class LatestTestResultInfo(BaseModel):
+    """测试用例最近一次执行结果"""
+    status: TestResultStatus = Field(..., description="最近测试结果状态")
+    tested_at: datetime = Field(..., description="最近测试时间")
+    test_run_id: Optional[UUID] = Field(default=None, description="所属测试运行 ID")
+
+
+class LatestTestResultUpdate(BaseModel):
+    """更新测试用例最近一次测试结果"""
+    status: Optional[TestResultStatus] = Field(
+        default=None,
+        description="测试结果状态；不传或传 null 表示重置为未测试",
+    )
 
 
 class TestStepBase(BaseModel):
@@ -187,6 +203,10 @@ class TestCaseInfo(BaseModel):
     scenario: Optional[str] = Field(default=None, description="BDD Scenario 描述")
     background: Optional[str] = Field(default=None, description="BDD Background 描述")
     links: Optional[LinkInfo] = Field(default=None, description="相关资源链接")
+    latest_test_result: Optional[LatestTestResultInfo] = Field(
+        default=None,
+        description="最近一次测试结果，无记录时为 null",
+    )
 
     model_config = {"from_attributes": True}
 
@@ -283,6 +303,32 @@ class BulkOperationResponse(BaseResponse):
     success: bool = Field(default=True)
     message: str = Field(..., description="操作结果消息")
     affected_count: int = Field(..., description="受影响的测试用例数量")
+
+
+class TestCaseImportError(BaseModel):
+    """导入失败记录"""
+    row: int = Field(..., description="行号或序号")
+    name: Optional[str] = Field(default=None, description="用例名称")
+    message: str = Field(..., description="错误信息")
+
+
+class TestCaseImportResponse(BaseResponse):
+    """测试用例导入响应"""
+    success: bool = Field(default=True)
+    message: str = Field(..., description="导入结果摘要")
+    imported_count: int = Field(default=0, description="成功导入数量")
+    failed_count: int = Field(default=0, description="失败数量")
+    errors: list[TestCaseImportError] = Field(default_factory=list, description="失败详情")
+    test_cases: list[TestCaseInfo] = Field(default_factory=list, description="成功导入的用例")
+
+
+class ImportTestCasesFromApiRequest(BaseModel):
+    """从 API 测试导入测试用例请求"""
+    endpoint_ids: list[str] = Field(..., min_length=1, description="API 端点 ID 列表")
+    folder_id: Optional[UUID] = Field(
+        default=None,
+        description="可选导入根目录；系统将在此目录下按 Swagger 功能模块自动创建子文件夹",
+    )
 
 
 # ============ BDD 导出相关模型 ============

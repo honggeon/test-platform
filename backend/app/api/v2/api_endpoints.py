@@ -13,9 +13,11 @@ API 端点管理路由
 """
 
 
+import ipaddress
 import json
 import httpx
 from typing import Any
+from urllib.parse import urlparse
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -40,6 +42,20 @@ from app.services.openapi_parser import OpenAPIParser
 router = APIRouter()
 
 
+def _url_should_bypass_system_proxy(url: str) -> bool:
+    """内网/本机地址不走系统代理，避免 Clash 等代理对 LAN 返回 502。"""
+    host = urlparse(url).hostname
+    if not host:
+        return False
+    if host in ("localhost", "::1") or host.endswith(".local"):
+        return True
+    try:
+        ip = ipaddress.ip_address(host)
+        return ip.is_private or ip.is_loopback or ip.is_link_local
+    except ValueError:
+        return False
+
+
 async def fetch_openapi_from_url(url: str) -> dict[str, Any]:
     """
     从远程 URL 获取 OpenAPI 文档
@@ -53,8 +69,13 @@ async def fetch_openapi_from_url(url: str) -> dict[str, Any]:
     Raises:
         HTTPException: 当获取失败或内容格式不正确时
     """
+    bypass_proxy = _url_should_bypass_system_proxy(url)
     try:
-        async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(
+            timeout=30.0,
+            follow_redirects=True,
+            trust_env=not bypass_proxy,
+        ) as client:
             response = await client.get(url)
             response.raise_for_status()
 
@@ -96,9 +117,20 @@ async def fetch_openapi_from_url(url: str) -> dict[str, Any]:
                 )
 
     except httpx.HTTPStatusError as e:
+        detail = (
+            f"无法从 URL 获取文档: HTTP {e.response.status_code} "
+            f"{e.response.reason_phrase}"
+        )
+        if e.response.status_code == 502 and not bypass_proxy:
+            detail += (
+                "\n若目标为内网地址，请确认系统代理（如 Clash）已将该主机加入 "
+                "绕过列表，或改用「上传 JSON 文件」方式导入。"
+            )
+        elif e.response.status_code == 502 and bypass_proxy:
+            detail += "\n请确认该地址在本机可直接访问，且返回的是 OpenAPI JSON 直链。"
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"无法从 URL 获取文档: HTTP {e.response.status_code} {e.response.reason_phrase}"
+            detail=detail,
         )
     except httpx.TimeoutException:
         raise HTTPException(
@@ -432,6 +464,28 @@ async def delete_api_endpoint(
     await db.delete(endpoint)
     await db.commit()
 
+    return None
+
+
+@router.post("/api-endpoints/bulk-delete", status_code=status.HTTP_204_NO_CONTENT)
+async def bulk_delete_api_endpoints(
+    data: dict,
+    current_user_id: CurrentUserIdDep,
+    db: DbSessionDep
+):
+    """批量删除 API 端点"""
+    endpoint_ids = data.get("endpoint_ids", [])
+    for endpoint_id_str in endpoint_ids:
+        try:
+            endpoint_id = UUID(endpoint_id_str)
+        except ValueError:
+            continue
+        endpoint_stmt = select(APIEndpoint).where(APIEndpoint.id == endpoint_id)
+        endpoint_result = await db.execute(endpoint_stmt)
+        endpoint = endpoint_result.scalar_one_or_none()
+        if endpoint:
+            await db.delete(endpoint)
+    await db.commit()
     return None
 
 

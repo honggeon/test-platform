@@ -179,6 +179,21 @@ export interface TestStepCreate {
   result?: string;
 }
 
+// 测试结果状态
+export type TestResultStatus =
+  | "passed"
+  | "failed"
+  | "skipped"
+  | "blocked"
+  | "not_executed";
+
+// 最近一次测试结果
+export interface LatestTestResultInfo {
+  status: TestResultStatus;
+  tested_at: string;
+  test_run_id?: string | null;
+}
+
 // 测试用例信息
 export interface TestCaseInfo {
   id: string;
@@ -205,6 +220,7 @@ export interface TestCaseInfo {
   feature?: string;
   scenario?: string;
   background?: string;
+  latest_test_result?: LatestTestResultInfo | null;
 }
 
 // 创建测试用例请求
@@ -279,14 +295,6 @@ export interface TestRunInfo {
   skipped_tests: number;
   blocked_tests: number;
 }
-
-// 测试结果状态
-export type TestResultStatus =
-  | "passed"
-  | "failed"
-  | "skipped"
-  | "blocked"
-  | "untested";
 
 // Web 功能简要信息（用于文件夹树展示）
 export interface WebFunctionSummary {

@@ -289,6 +289,19 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant, initia
   const hasTasks = todos.length > 0;
   const hasFiles = Object.keys(files).length > 0;
 
+  const activeSubagentName = useMemo(() => {
+    if (!isLoading || messages.length === 0) return null;
+    const last = messages[messages.length - 1];
+    if (last.type !== "ai" || !last.tool_calls?.length) return null;
+    const pendingTask = last.tool_calls.find(
+      (tc: { name?: string; id?: string }) => tc.name === "task"
+    );
+    if (!pendingTask) return null;
+    const args = (pendingTask as { args?: Record<string, unknown> }).args;
+    const name = args?.subagent_type;
+    return typeof name === "string" && name ? name : null;
+  }, [isLoading, messages]);
+
   // Parse out any action requests or review configs from the interrupt
   const actionRequestsMap: Map<string, ActionRequest> | null = useMemo(() => {
     const actionRequests =
@@ -322,6 +335,15 @@ export const ChatInterface = React.memo<ChatInterfaceProps>(({ assistant, initia
             </div>
           ) : (
             <>
+              {isLoading && activeSubagentName && (
+                <div className="mb-4 flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+                  <Clock size={16} className="shrink-0 animate-pulse" />
+                  <span>
+                    Subagent <strong className="text-foreground">{activeSubagentName}</strong>{" "}
+                    正在执行（同步委派，完成后才会返回结果；hat-executor 执行测试可能需要 1–5 分钟）
+                  </span>
+                </div>
+              )}
               {processedMessages.map((data, index) => {
                 const messageUi = ui?.filter(
                   (u: any) => u.metadata?.message_id === data.message.id

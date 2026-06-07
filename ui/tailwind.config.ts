@@ -21,7 +21,13 @@ const config: Config = {
   theme: {
   	extend: {
   		fontFamily: {
-  			sans: ['var(--font-sans)'],
+  			sans: ['"PingFang SC"', '"Microsoft YaHei"', '"Noto Sans SC"', 'system-ui', '-apple-system', 'sans-serif'],
+  		},
+  		fontSize: {
+  			sm: ['0.9375rem', { lineHeight: '1.25rem' }],
+  			base: ['1rem', { lineHeight: '1.5rem' }],
+  			lg: ['1.125rem', { lineHeight: '1.75rem' }],
+  			xl: ['1.25rem', { lineHeight: '1.75rem' }],
   		},
   		colors: {
   			background: 'hsl(var(--background))',

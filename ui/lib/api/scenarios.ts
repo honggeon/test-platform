@@ -121,6 +121,50 @@ export async function deleteScenario(scenarioId: string): Promise<void> {
   }
 }
 
+/**
+ * 批量删除场景
+ */
+export async function bulkDeleteScenarios(
+  scenarioIds: string[]
+): Promise<void> {
+  const response = await fetch(`${API_BASE}/bulk-delete`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_ids: scenarioIds }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to bulk delete scenarios');
+  }
+}
+
+/**
+ * 批量执行场景
+ */
+export async function bulkRunScenarios(
+  scenarioIds: string[],
+  data?: {
+    variables?: Record<string, any>;
+    base_url?: string;
+  }
+): Promise<{
+  run_id: string;
+  status: string;
+  message: string;
+  result?: any;
+}> {
+  const response = await fetch(`${API_BASE}/bulk-run`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ scenario_ids: scenarioIds, ...data }),
+  });
+
+  if (!response.ok) {
+    throw new Error('Failed to bulk run scenarios');
+  }
+  return response.json();
+}
+
 // ==================== 步骤管理 ====================
 
 /**

@@ -346,6 +346,8 @@ class ScenarioExecutionEngine:
         """执行场景"""
         # 初始化异步 HTTP 客户端
         self.http_client = httpx.AsyncClient(timeout=30.0)
+        scenario = None
+        run = None
 
         try:
             # 1. 加载场景
@@ -360,14 +362,31 @@ class ScenarioExecutionEngine:
                 self.context.set_variable("baseUrl", base_url)
 
             # 4. 按顺序执行步骤
+            has_failure = False
             for step in scenario.steps:
+                # 条件执行：判断是否需要跳过
+                if step.condition_expression:
+                    should_execute = self._evaluate_condition(step.condition_expression)
+                    if not should_execute:
+                        await self._record_skipped_step(step, run)
+                        from sqlalchemy import update
+                        await self.session.execute(
+                            update(ScenarioRun)
+                            .where(ScenarioRun.id == run.id)
+                            .values(skipped_steps=ScenarioRun.skipped_steps + 1)
+                        )
+                        await self.session.commit()
+                        continue
+
                 result = await self._execute_step(step, run)
 
                 # 检查是否需要停止
-                if result.status == "failed" and not step.continue_on_failure:
-                    run.status = "failed"
-                    run.error_message = f"步骤 {step.step_order} 失败: {result.error_message}"
-                    break
+                if result.status in ("failed", "error"):
+                    has_failure = True
+                    if not step.continue_on_failure:
+                        run.status = "failed"
+                        run.error_message = f"步骤 {step.step_order} 失败: {result.error_message}"
+                        break
 
                 # 应用延迟
                 if step.delay_ms > 0:
@@ -375,7 +394,7 @@ class ScenarioExecutionEngine:
 
             # 5. 完成执行
             if run.status != "failed":
-                run.status = "completed"
+                run.status = "failed" if has_failure else "completed"
 
             run.completed_at = datetime.now(timezone.utc)
             run.duration_ms = int(
@@ -395,6 +414,9 @@ class ScenarioExecutionEngine:
                 )
             )
 
+            # 更新场景最后运行状态
+            scenario.last_run_status = run.status
+            scenario.last_run_at = run.completed_at
             await self.session.commit()
 
             # 重新查询 run 对象以获取最新状态
@@ -403,6 +425,34 @@ class ScenarioExecutionEngine:
             run = run_result.scalar_one()
 
             return run
+        except asyncio.CancelledError:
+            if run:
+                try:
+                    await self._finalize_run_on_error(run, "cancelled")
+                except Exception:
+                    pass
+            if scenario:
+                try:
+                    scenario.last_run_status = "cancelled"
+                    scenario.last_run_at = datetime.now(timezone.utc)
+                    await self.session.commit()
+                except Exception:
+                    pass
+            raise
+        except Exception as e:
+            if run:
+                try:
+                    await self._finalize_run_on_error(run, "failed", str(e))
+                except Exception:
+                    pass
+            if scenario:
+                try:
+                    scenario.last_run_status = "failed"
+                    scenario.last_run_at = datetime.now(timezone.utc)
+                    await self.session.commit()
+                except Exception:
+                    pass
+            raise
         finally:
             # 关闭 HTTP 客户端
             if self.http_client:
@@ -449,71 +499,89 @@ class ScenarioExecutionEngine:
     async def _execute_step(
         self, step: ScenarioStep, run: ScenarioRun
     ) -> ScenarioStepResult:
-        """执行单个步骤"""
+        """执行单个步骤（支持重试）"""
         start_time = datetime.now(timezone.utc)
+        max_retries = getattr(step, 'retry_count', None) or 0
 
-        try:
-            # 1. 加载端点（如果没有端点ID则创建虚拟端点）
-            endpoint = await self._load_endpoint(step.endpoint_id, step)
+        # 用于保存每次尝试的结果
+        last_request: dict = {}
+        last_response: dict = {}
+        last_extracted: dict = {}
+        last_assertion_results: list = []
+        last_status = "passed"
+        last_error_message: str | None = None
+        last_exception: Exception | None = None
 
-            # 2. 解析数据依赖，构建请求
-            request = await self.resolver.resolve_request(step, endpoint, self.session)
+        for attempt in range(max_retries + 1):
+            try:
+                # 1. 加载端点（如果没有端点ID则创建虚拟端点）
+                endpoint = await self._load_endpoint(step.endpoint_id, step)
 
-            # 3. 发送 HTTP 请求
-            response = await self._send_request(request)
+                # 2. 解析数据依赖，构建请求
+                request = await self.resolver.resolve_request(step, endpoint, self.session)
 
-            # 4. 提取数据到上下文
-            extractors = self._ensure_list(step.extractors)
-            extracted = self._extract_data(response, extractors)
-            self.context.update_step_data(str(step.id), extracted)
+                # 3. 发送 HTTP 请求
+                response = await self._send_request(request)
 
-            # 5. 执行断言
-            assertions = self._ensure_list(step.assertions)
-            assertion_results = self._run_assertions(response, assertions)
+                # 4. 提取数据到上下文
+                extractors = self._ensure_list(step.extractors)
+                extracted = self._extract_data(response, extractors)
+                self.context.update_step_data(str(step.id), extracted)
 
-            # 6. 判断状态
-            status = "passed"
-            error_message = None
-            for assertion in assertion_results:
-                if not assertion["passed"]:
-                    status = "failed"
-                    error_message = assertion.get("message", "断言失败")
+                # 5. 执行断言
+                assertions = self._ensure_list(step.assertions)
+                assertion_results = self._run_assertions(response, assertions)
+
+                # 6. 判断状态
+                status = "passed"
+                error_message = None
+                for assertion in assertion_results:
+                    if not assertion["passed"]:
+                        status = "failed"
+                        error_message = assertion.get("message", "断言失败")
+                        break
+
+                # 保存最后一次结果
+                last_request = request
+                last_response = response
+                last_extracted = extracted
+                last_assertion_results = assertion_results
+                last_status = status
+                last_error_message = error_message
+                last_exception = None
+
+                if status == "passed":
+                    # 成功，跳出重试循环
+                    break
+                elif attempt < max_retries:
+                    # 断言失败且还有重试次数，继续重试
+                    continue
+                else:
+                    # 断言失败且已用完重试次数
                     break
 
-            # 7. 记录结果
-            duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-            result = await self._record_result(
-                step, run, request, response, extracted, assertion_results, status, duration_ms, error_message
-            )
+            except Exception as e:
+                import traceback
+                last_exception = e
+                last_error_message = f"{str(e)}\n\nStack trace:\n{traceback.format_exc()}"
+                last_status = "error"
+                last_request = last_request if last_request else {}
+                last_response = last_response if last_response else {}
+                last_extracted = {}
+                last_assertion_results = []
 
-            # 8. 更新运行统计（使用 update 语句避免触发 ORM 事件）
-            from sqlalchemy import update
-            if status == "passed":
-                await self.session.execute(
-                    update(ScenarioRun)
-                    .where(ScenarioRun.id == run.id)
-                    .values(passed_steps=ScenarioRun.passed_steps + 1)
-                )
-            else:
-                await self.session.execute(
-                    update(ScenarioRun)
-                    .where(ScenarioRun.id == run.id)
-                    .values(failed_steps=ScenarioRun.failed_steps + 1)
-                )
+                if attempt < max_retries:
+                    # 异常且还有重试次数，继续重试
+                    continue
+                else:
+                    # 异常且已用完重试次数
+                    break
 
-            await self.session.commit()
+        # 计算总耗时
+        duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
 
-            return result
-
-        except Exception as e:
-            # 记录错误（包含完整的堆栈跟踪和上下文信息）
-            import traceback
-            duration_ms = int((datetime.now(timezone.utc) - start_time).total_seconds() * 1000)
-
-            # 获取详细的错误信息和上下文
-            error_detail = f"{str(e)}\n\nStack trace:\n{traceback.format_exc()}"
-
-            # 添加上下文信息以帮助调试
+        # 如果是异常且未记录到结果，构造完整的错误详情
+        if last_exception:
             context_info = {
                 "step_id": str(step.id),
                 "step_order": step.step_order,
@@ -521,24 +589,37 @@ class ScenarioExecutionEngine:
                 "endpoint_id": str(step.endpoint_id) if step.endpoint_id else None,
                 "available_variables": dict(self.context.variables),
                 "available_step_data": dict(self.context.step_data),
+                "retry_count": max_retries,
+                "attempts": attempt + 1,
             }
-
-            error_detail = f"{error_detail}\n\nContext:\n{json.dumps(context_info, indent=2, ensure_ascii=False)}"
-
-            result = await self._record_result(
-                step, run, {}, {}, {}, [], "error", duration_ms, error_detail
+            last_error_message = (
+                f"{last_error_message}\n\nContext:\n"
+                f"{json.dumps(context_info, indent=2, ensure_ascii=False)}"
             )
 
-            # 使用 update 语句更新失败计数
-            from sqlalchemy import update
+        # 记录结果（使用最后一次尝试的结果）
+        result = await self._record_result(
+            step, run, last_request, last_response, last_extracted,
+            last_assertion_results, last_status, duration_ms, last_error_message
+        )
+
+        # 更新运行统计
+        from sqlalchemy import update
+        if last_status == "passed":
+            await self.session.execute(
+                update(ScenarioRun)
+                .where(ScenarioRun.id == run.id)
+                .values(passed_steps=ScenarioRun.passed_steps + 1)
+            )
+        else:
             await self.session.execute(
                 update(ScenarioRun)
                 .where(ScenarioRun.id == run.id)
                 .values(failed_steps=ScenarioRun.failed_steps + 1)
             )
 
-            await self.session.commit()
-            return result
+        await self.session.commit()
+        return result
 
     async def _load_endpoint(self, endpoint_id: UUID | None, step: ScenarioStep = None) -> APIEndpoint:
         """加载端点，如果没有端点ID则创建虚拟端点"""
@@ -774,8 +855,25 @@ class ScenarioExecutionEngine:
             return actual > expected
         elif operator == "lt":
             return actual < expected
+        elif operator == "ge":
+            return actual >= expected
+        elif operator == "le":
+            return actual <= expected
         elif operator == "contains":
-            return expected in actual
+            return expected in actual if actual is not None else False
+        elif operator == "not_contains":
+            return expected not in actual if actual is not None else True
+        elif operator == "exists":
+            return actual is not None
+        elif operator == "not_exists":
+            return actual is None
+        elif operator == "starts_with":
+            return str(actual).startswith(str(expected)) if actual is not None else False
+        elif operator == "ends_with":
+            return str(actual).endswith(str(expected)) if actual is not None else False
+        elif operator == "regex_match":
+            import re
+            return bool(re.search(str(expected), str(actual))) if actual is not None else False
         else:
             return False
 
@@ -808,4 +906,90 @@ class ScenarioExecutionEngine:
         )
         self.session.add(result)
         return result
+
+    async def _finalize_run_on_error(
+        self, run: ScenarioRun, status: str, error_message: str | None = None
+    ):
+        """在异常中断时完成 run 记录，防止状态永久卡在 running"""
+        from sqlalchemy import update
+        run.completed_at = datetime.now(timezone.utc)
+        run.duration_ms = (
+            int((run.completed_at - run.started_at).total_seconds() * 1000)
+            if run.started_at else 0
+        )
+        run.status = status
+        if error_message:
+            run.error_message = error_message
+        await self.session.execute(
+            update(ScenarioRun)
+            .where(ScenarioRun.id == run.id)
+            .values(
+                status=run.status,
+                completed_at=run.completed_at,
+                duration_ms=run.duration_ms,
+                error_message=run.error_message,
+            )
+        )
+        await self.session.commit()
+
+    def _evaluate_condition(self, expression: str) -> bool:
+        """评估条件表达式，决定是否执行步骤
+
+        支持的语法：
+        - {{variable}}: 引用上下文变量
+        - 比较运算符: ==, !=, >, <, >=, <=
+        - 逻辑运算符: and, or, not
+        - in 运算符: 'value' in ['a', 'b']
+        """
+        if not expression or not expression.strip():
+            return True
+
+        try:
+            # 1. 提取 {{variable}} 占位符，收集变量值
+            pattern = r'\{\{(\w+(?:\.\w+)*)\}\}'
+            var_names = set(re.findall(pattern, expression))
+
+            var_context: Dict[str, Any] = {}
+            for var_name in var_names:
+                value = self.context.get_variable(var_name)
+                # 将点号分隔的变量名转为合法的标识符（如 baseUrl -> baseUrl）
+                # jinja2 变量名支持字母数字下划线，点号需要拆分
+                if '.' in var_name:
+                    # 对于嵌套属性，直接取最外层变量名
+                    root_name = var_name.split('.')[0]
+                    if root_name not in var_context:
+                        var_context[root_name] = self.context.get_variable(root_name)
+                else:
+                    var_context[var_name] = value
+
+            # 2. 将表达式中的 {{variable}} 替换为合法变量名（保留 jinja2 原生属性访问）
+            jinja_expr = re.sub(pattern, lambda m: m.group(1), expression)
+
+            # 3. 使用 Jinja2 Sandbox 安全求值
+            from jinja2.sandbox import SandboxedEnvironment
+            env = SandboxedEnvironment()
+            ast = env.compile_expression(jinja_expr)
+            return bool(ast(**var_context))
+        except Exception:
+            # 表达式解析失败时，默认执行步骤（避免阻塞）
+            return True
+
+    async def _record_skipped_step(self, step: ScenarioStep, run: ScenarioRun):
+        """记录被条件跳过的步骤"""
+        result = ScenarioStepResult(
+            id=uuid4(),
+            run_id=run.id,
+            step_id=step.id,
+            endpoint_id=step.endpoint_id,
+            step_order=step.step_order,
+            status="skipped",
+            request_data={},
+            response_data={},
+            extracted_data={},
+            assertion_results=[],
+            duration_ms=0,
+            error_message=f"条件表达式不满足，已跳过: {step.condition_expression}",
+        )
+        self.session.add(result)
+        await self.session.commit()
 

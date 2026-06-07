@@ -1,0 +1,50 @@
+基础配置: #固定的key
+  用例类型: ApiCase  #WebCase AppCase  ApiCase
+  用例标题: 登录测试用例
+  一级模块: 登陆模块  #把登陆相关的放在一个模块中  把扩展相关的放在一个模块里面
+  二级模块: 登陆功能
+
+
+前置脚本:  #附加脚本数据  生成测试数据 调用数据库
+  - "context.update({'uname':'youer'})"
+
+后置脚本: ""
+
+用例步骤:
+- 发送登录接口:
+    操作类型: 发送请求POST
+    请求地址: "{{URL}}/index.php"  #加不加index.php对于这个商城项目接口都可以  如果加可以在后面加个/index.php
+    URL参数:
+      s: /api/user/login
+      application: app
+      application_client_type: weixin
+    请求数据:
+      accounts: "{{uname}}"
+      pwd: "123456"
+      type: "username"
+
+- 提取响应数据token:
+    操作类型: 提取数据JSON
+    表达式: $..token
+    变量名: msg_token
+
+- 提取响应数据msg:  #接口返回的实际结果
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_data
+
+- 断言响应数据MSG:
+    操作类型: 断言文本相等
+    期望结果: 登录成功
+    实际结果: "{{msg_data}}"
+
+- 提取数据-MYSQL:
+    操作类型: 提取数据MYSQL
+    数据库: 电商数据库
+    SQL: "select id,username from sxo_user where username = 'youer'"
+    变量名: [uid,uname]
+
+- 断言响应数据MSG:
+    操作类型: 断言文本相等
+    期望结果: "{{uname}}"
+    实际结果: "{{uname_1}}"

@@ -1,0 +1,26 @@
+_数据库:
+  mysql001:
+    host: shop-xo.hctestedu.com
+    port: 3306
+    user: api_test
+    password: Aa9999!
+    db: shop_hctested
+  mysql002:
+    host: shop-xo.hctestedu.com
+    port: 3306
+    user: api_test
+    password: Aa9999!
+    db: novel-plus
+  dsw_mysql:
+    host: shop-xo.hctestedu.com
+    port: 3306
+    user: api_test
+    password: Aa9999!
+    db: novel-plus
+用例类型: ApiCase
+URL: http://shop-xo.hctestedu.com
+DSWURL: http://novel.hctestedu.com/
+dsw_name: 15096268002
+dsw_password: 123456
+shop_name: youyi
+shop_password: 123456

@@ -28,6 +28,7 @@ from app.config import settings
 from app.config.database import async_session_factory
 from app.models.attachment import Attachment
 from app.config.minio_client import MinIOClient
+from app.utils.hat_paths import get_api_workspace_root, get_api_workspace_tests_dir, sanitize_workspace_relative_path
 
 
 # ============================================================================
@@ -35,9 +36,6 @@ from app.config.minio_client import MinIOClient
 # ============================================================================
 
 # workspace 测试服务器根目录
-WORKSPACE_TESTS_ROOT = Path(settings.api_workspace_root) / "tests"
-
-
 def ensure_workspace_tests_dir() -> Path:
     """
     确保 测试目录存在并返回路径
@@ -45,8 +43,9 @@ def ensure_workspace_tests_dir() -> Path:
     Returns:
         测试目录的绝对路径
     """
-    WORKSPACE_TESTS_ROOT.mkdir(parents=True, exist_ok=True)
-    return WORKSPACE_TESTS_ROOT
+    tests_dir = get_api_workspace_tests_dir()
+    tests_dir.mkdir(parents=True, exist_ok=True)
+    return tests_dir
 
 
 @tool
@@ -184,30 +183,34 @@ async def download_api_script(
         # 4. 生成本地文件名（带时间戳）
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         file_extension = Path(original_filename).suffix
+        is_hat_yaml = file_extension.lower() in (".yaml", ".yml")
 
-        # 确保文件名符合 Playwright 的测试文件模式
-        if not original_filename.endswith(('.spec.ts', '.test.ts')):
+        if is_hat_yaml:
             base_name = Path(original_filename).stem
-            local_filename = f"{filename or base_name}_{timestamp}.spec{file_extension}"
+            local_filename = f"{filename or base_name}_{timestamp}{file_extension}"
+        elif not original_filename.endswith(('.spec.ts', '.test.ts')):
+            base_name = Path(original_filename).stem
+            local_filename = f"{filename or base_name}_{timestamp}.spec{file_extension or '.ts'}"
         else:
             base_name = original_filename.replace('.spec.', '_').replace('.test.', '_')
             local_filename = f"test_{timestamp}.spec{file_extension}"
 
-        # 支持子目录：如果 filename 包含路径分隔符（如 "PR-1/api-tests/get-list"），
-        # 提取目录部分并在 workspace_tests_dir 下创建
+        workspace_root = get_api_workspace_root()
         local_path = workspace_tests_dir / local_filename
-        if filename and '/' in filename:
-            # 用户指定了子目录路径，优先使用
-            # 安全处理：拒绝绝对路径（防止产生嵌套的 home/hongge/... 结构）
-            clean_filename = filename.lstrip('/').lstrip('\\')
-            if Path(clean_filename).is_absolute() or clean_filename.startswith('..'):
-                print(f"[Script Download] 警告: 忽略不安全的文件名参数: {filename}")
-            else:
+        if filename:
+            clean_filename = sanitize_workspace_relative_path(filename, workspace_root)
+            if clean_filename and ('/' in clean_filename or '\\' in clean_filename):
                 sub_path = workspace_tests_dir / clean_filename
-                sub_path = sub_path.with_suffix('.spec.ts')
-                if not sub_path.parent.exists():
-                    sub_path.parent.mkdir(parents=True, exist_ok=True)
+                if is_hat_yaml:
+                    if not sub_path.suffix:
+                        sub_path = sub_path.with_suffix(file_extension or ".yaml")
+                else:
+                    sub_path = sub_path.with_suffix('.spec.ts')
+                sub_path.parent.mkdir(parents=True, exist_ok=True)
                 local_path = sub_path
+            elif clean_filename and clean_filename != filename.strip().strip('/\\'):
+                print(f"[Script Download] 警告: 已规范化不安全路径: {filename} -> {clean_filename}")
+                local_path = workspace_tests_dir / f"{clean_filename}_{timestamp}{file_extension or '.yaml' if is_hat_yaml else '.spec.ts'}"
 
         # 5. 保存到本地
         with open(local_path, 'w', encoding='utf-8') as f:
@@ -216,7 +219,6 @@ async def download_api_script(
         print(f"[Script Download] 脚本已下载到: {local_path}")
 
         # 6. 计算相对于 workspace_root 的路径（供 FixedFilesystemBackend 使用）
-        workspace_root = Path(settings.api_workspace_root).resolve()
         relative_path = local_path.resolve().relative_to(workspace_root).as_posix()
 
         # 7. 返回结果

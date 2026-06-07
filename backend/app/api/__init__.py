@@ -15,7 +15,7 @@ API 路由模块
 
 from fastapi import APIRouter
 
-from .v2 import projects, folders, test_cases, test_runs, test_results, attachments, configurations, llm_config, test_plans, documents, api_tests, api_tests_extended, api_endpoints, scenarios, web_tests, web_functions, environments, reports, test_reports, code_repo, code_analysis, diagnosis
+from .v2 import projects, folders, test_cases, test_runs, test_results, attachments, configurations, llm_config, test_plans, documents, api_tests, api_tests_extended, api_endpoints, scenarios, web_tests, web_functions, environments, reports, test_reports, code_repo, code_analysis, diagnosis, a2a
 
 # 创建 API v2 路由
 api_router = APIRouter(prefix="/api/v2")
@@ -47,6 +47,7 @@ api_router.include_router(code_repo.router, tags=["全栈分析"])
 api_router.include_router(code_analysis.router, tags=["全栈分析"])
 api_router.include_router(diagnosis.router, tags=["诊断报告"])
 api_router.include_router(diagnosis.ws_router, tags=["诊断报告 WebSocket"])
+api_router.include_router(a2a.router, tags=["A2A 日志分析 Agent"])
 
 __all__ = ["api_router"]
 

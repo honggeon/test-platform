@@ -12,7 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from sqlalchemy import Column, Integer, Text, DateTime, text, delete, select, func
+from sqlalchemy import Column, Integer, Text, DateTime, text, delete, select, func, or_
 from sqlalchemy.dialects.postgresql import UUID, JSONB
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -111,6 +111,8 @@ _INDEX_STMTS = [
 
 async def ensure_indexes(session):
     """确保数据库索引存在"""
+    # pg_trgm 扩展是 gin_trgm_ops 索引的前置依赖
+    await session.execute(text("CREATE EXTENSION IF NOT EXISTS pg_trgm"))
     for stmt in _INDEX_STMTS:
         await session.execute(text(stmt))
     await session.commit()

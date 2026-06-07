@@ -22,8 +22,11 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from langchain.chat_models import init_chat_model
 from langchain_core.tools import tool
+
+from app.models.mongodb.diagnosis_report import DiagnosisReport
+from app.services.diagnosis_llm import classify_failure_with_llm
+from app.services.diagnosis_notification_service import manager as ws_manager
 
 logger = logging.getLogger(__name__)
 
@@ -106,11 +109,7 @@ async def _llm_classify(
     error_message: str,
     response_body: str,
 ) -> dict:
-    """LLM 兜底分类
-
-    当规则引擎未命中时，调用 LLM 分析失败的根因。
-    结果会被缓存 24 小时。
-    """
+    """LLM 兜底分类（使用共享 diagnosis_llm 模块，带内存缓存）"""
     cache = _llm_diagnosis_cache
     key = _cache_key(status_code, method, endpoint, error_message)
     if key in cache:
@@ -118,55 +117,21 @@ async def _llm_classify(
         cached["cache_hit"] = True
         return cached
 
-    prompt = f"""你是一个测试失败根因分析专家。
-给定以下 HTTP 请求和响应，分析失败的根本原因。
+    result, _usage = await classify_failure_with_llm(
+        endpoint=endpoint,
+        method=method,
+        status_code=status_code,
+        error_message=error_message,
+        response_body=response_body,
+    )
+    result["cache_hit"] = False
 
-端点: {method} {endpoint}
-状态码: {status_code}
-响应体: {response_body}
-错误消息: {error_message}
-
-请从以下类别中选择：
-- token_expired: Token 过期或无效
-- permission_denied: 已认证但权限不足
-- api_changed: API 端点或参数已变更
-- data_error: 请求数据格式错误或测试数据不完整
-- network_timeout: 网络超时或服务不可用
-- script_error: 测试脚本本身的代码错误
-- unknown: 无法确定根因
-
-输出格式：JSON {{"type": "...", "confidence": 0-1, "reason": "..."}}
-"""
-
-    try:
-        model = init_chat_model("deepseek:deepseek-chat")
-        response = await model.ainvoke(prompt)
-        content = response.content if hasattr(response, "content") else str(response)
-
-        # 提取 JSON
-        match = re.search(r"\{.*\}", content, re.DOTALL)
-        if match:
-            result = json.loads(match.group())
-        else:
-            result = {"type": "unknown", "confidence": 0.5, "reason": "LLM 返回格式异常"}
-
-        # 校验字段
-        result.setdefault("type", "unknown")
-        result.setdefault("confidence", 0.5)
-        result.setdefault("reason", "")
-        result["cache_hit"] = False
-
-        # 写入缓存
-        cache[key] = {
-            "type": result["type"],
-            "confidence": result["confidence"],
-            "reason": result["reason"],
-        }
-        return result
-
-    except Exception as e:
-        logger.warning(f"LLM 兜底分类失败: {e}")
-        return {"type": "unknown", "confidence": 0.0, "reason": f"LLM 调用失败: {e}", "cache_hit": False}
+    cache[key] = {
+        "type": result["type"],
+        "confidence": result["confidence"],
+        "reason": result.get("reason", ""),
+    }
+    return result
 
 
 @tool
@@ -227,10 +192,7 @@ async def diagnose_failure(
 async def save_diagnosis_report(
     report_data: str,
 ) -> str:
-    """保存诊断报告到数据库
-
-    将诊断报告 JSON 持久化到数据库（PG + MongoDB）。
-    当前为 mock 实现，后续接入 TestDiagnosisService._save_report。
+    """保存诊断报告到数据库（PG + MongoDB）
 
     Args:
         report_data: 诊断报告 JSON 字符串
@@ -239,12 +201,15 @@ async def save_diagnosis_report(
         操作结果描述
     """
     try:
+        from app.services.test_diagnosis_service import TestDiagnosisService
+
         data = json.loads(report_data)
-        report_id = data.get("report_id", "unknown")
-        # TODO: 接入 TestDiagnosisService._save_report
-        logger.info(f"[mock] 保存诊断报告 report_id={report_id}")
+        report = DiagnosisReport(**data)
+        svc = TestDiagnosisService()
+        await svc._save_report(report)
+        logger.info(f"保存诊断报告 report_id={report.report_id}")
         return json.dumps(
-            {"success": True, "report_id": report_id, "message": "报告已保存（mock）"},
+            {"success": True, "report_id": report.report_id, "message": "报告已保存"},
             ensure_ascii=False,
         )
     except json.JSONDecodeError as e:
@@ -265,10 +230,7 @@ async def notify_frontend(
     report_id: str,
     status: str,
 ) -> str:
-    """推送诊断进展到前端
-
-    通过 WebSocket / Redis Pub/Sub 推送诊断状态更新。
-    当前为 mock 实现，后续接入 diagnosis_notification_service。
+    """通过 WebSocket / Redis Pub/Sub 推送诊断状态更新
 
     Args:
         project_id: 项目 ID
@@ -278,11 +240,26 @@ async def notify_frontend(
     Returns:
         操作结果描述
     """
-    logger.info(f"[mock] 推送诊断进展 project_id={project_id} report_id={report_id} status={status}")
+    if status == "completed":
+        await ws_manager.send_completed(project_id, {
+            "type": "diagnosis_completed",
+            "report_id": report_id,
+            "status": status,
+        })
+    else:
+        await ws_manager.send_progress(project_id, {
+            "type": "diagnosis_progress",
+            "report_id": report_id,
+            "status": status,
+            "phase": status,
+            "message": f"诊断状态: {status}",
+            "progress": 50 if status == "analyzing" else 0,
+        })
+    logger.info(f"推送诊断进展 project_id={project_id} report_id={report_id} status={status}")
     return json.dumps(
         {
             "success": True,
-            "message": f"已推送状态 {status} 到前端（mock）",
+            "message": f"已推送状态 {status} 到前端",
             "project_id": project_id,
             "report_id": report_id,
         },

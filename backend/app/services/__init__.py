@@ -21,6 +21,7 @@ from .test_run_service import TestRunService
 from .test_result_service import TestResultService
 from .attachment_service import AttachmentService
 from .configuration_service import ConfigurationService
+from .auth_service import AuthService
 
 __all__ = [
     "ProjectService",
@@ -31,5 +32,6 @@ __all__ = [
     "TestResultService",
     "AttachmentService",
     "ConfigurationService",
+    "AuthService",
 ]
 

@@ -164,6 +164,58 @@ class ScenarioService:
         await self.db.commit()
         return True
 
+    async def bulk_delete_scenarios(
+        self,
+        scenario_ids: list[UUID],
+    ) -> dict:
+        """批量删除场景"""
+        deleted_count = 0
+        failed_ids = []
+
+        for scenario_id in scenario_ids:
+            try:
+                success = await self.delete_scenario(scenario_id)
+                if success:
+                    deleted_count += 1
+                else:
+                    failed_ids.append(str(scenario_id))
+            except Exception:
+                failed_ids.append(str(scenario_id))
+
+        return {
+            "deleted_count": deleted_count,
+            "failed_ids": failed_ids,
+        }
+
+    async def bulk_run_scenarios(
+        self,
+        scenario_ids: list[UUID],
+        variables: dict,
+        base_url: str,
+        executed_by: UUID | None = None,
+    ) -> dict:
+        """批量执行场景"""
+        run_ids = []
+        failed_ids = []
+
+        for scenario_id in scenario_ids:
+            try:
+                run_id = await self.execute_scenario_async(
+                    scenario_id=scenario_id,
+                    variables=variables,
+                    base_url=base_url,
+                    executed_by=executed_by,
+                )
+                run_ids.append(str(run_id))
+            except Exception:
+                failed_ids.append(str(scenario_id))
+
+        return {
+            "run_ids": run_ids,
+            "failed_ids": failed_ids,
+            "total": len(scenario_ids),
+        }
+
     # ==================== 步骤管理 ====================
 
     async def list_steps(self, scenario_id: UUID) -> List[ScenarioStep]:

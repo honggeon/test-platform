@@ -41,7 +41,9 @@ nohup.out
 
 # OS
 .DS_Store
-Thumbs.db
+# SQLite auth database
+backend/data/*.db
+
 
 # Test artifacts
 playwright-report/

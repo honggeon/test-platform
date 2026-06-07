@@ -207,17 +207,14 @@ async def retry_diagnosis(
     new_dedup_key = f"{run_id}_{project_id}_retry_{int(time.time())}"
 
     service = TestDiagnosisService()
-    # 直接执行诊断，跳过 service 内部的幂等检查
-    # 由于 diagnose_run 内部会检查 dedup_key，我们传入 options 让后台使用新的 key
-    # 但 diagnose_run 的 dedup_key 是固定的 f"{run_id}_{project_id}"
-    # 这里我们通过 options 传递 new_dedup_key，但需要修改 service 逻辑才能生效
-    # 当前简化实现：直接调用 diagnose_run，它可能返回已有报告
-    # 如果确实需要 retry 语义，应在 service 层支持 override_dedup_key
     report = await service.diagnose_run(
         run_id=run_id,
         project_id=str(project_id),
         project_identifier=project_identifier,
-        options={"override_dedup_key": new_dedup_key},
+        options={
+            "override_dedup_key": new_dedup_key,
+            "retry_of_report_id": str(report_id),
+        },
     )
 
     return SuccessResponse(

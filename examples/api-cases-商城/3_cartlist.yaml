@@ -1,0 +1,34 @@
+基础配置: # 固定的KEY
+  用例类型: ApiCase # WebCase 、 ApiCase 、 AppCase
+  用例标题: 查询购物车列表数据
+  一级模块: 购物车模块
+  二级模块: 查看购物车功能
+
+前置脚本: ""
+
+后置脚本: ""
+
+用例步骤: # 固定的KEY
+- 发送购物车接口:
+    操作类型: 发送请求GET
+    请求地址: "{{URL}}"
+    URL参数:
+      s: api/cart/index
+      application: app
+      token: '{{msg_token}}'
+
+- 提取响应数据-MSG:
+    操作类型: 提取数据JSON
+    表达式: $..msg
+    变量名: msg_success
+
+- 断言响应数据MSG:
+    操作类型: 断言文本
+    期望结果: success
+    实际结果: "{{msg_success}}"
+    比较符: ==
+
+- 提取响应数据-MSG:
+    操作类型: 提取数据JSON
+    表达式: $..id
+    变量名: card_id_1

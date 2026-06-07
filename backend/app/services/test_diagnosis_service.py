@@ -15,6 +15,7 @@ KG 代码定位、生成修复建议并持久化诊断报告。
 
 import asyncio
 import hashlib
+import json
 import logging
 import os
 import re
@@ -31,8 +32,13 @@ from app.config.database import MongoDB, async_session_factory
 from app.models.diagnosis_report import DiagnosisReportPG
 from app.models.mongodb.diagnosis_report import DiagnosisReport
 from app.models.test_scenario import ScenarioStepResult
-from app.agents.log_analysis.tools.kg_integration_tools import KGIntegrationTools
 from app.services.diagnosis_cache import DiagnosisCache
+from app.services.diagnosis_llm import (
+    classify_failure_with_llm,
+    extract_affects_apis,
+    generate_fix_suggestions,
+    keyword_classify,
+)
 from app.services.diagnosis_notification_service import manager as ws_manager
 
 logger = logging.getLogger(__name__)
@@ -76,15 +82,19 @@ class TestDiagnosisService:
                 return existing
         # 2. 分布式锁（可选）
         # 3. 执行诊断
-        return await self._execute_diagnosis(run_id, project_id, project_identifier, options, preset_report_id)
+        return await self._execute_diagnosis(run_id, project_id, project_identifier, options, preset_report_id, dedup_key)
 
-    async def _execute_diagnosis(self, run_id, project_id, project_identifier, options, preset_report_id=None) -> DiagnosisReport:
+    async def _execute_diagnosis(self, run_id, project_id, project_identifier, options, preset_report_id=None, dedup_key=None) -> DiagnosisReport:
         start_time = time.monotonic()
         degradation = {"has_db_logs": True, "has_kg_locations": True, "has_llm_analysis": True, "fallback_reason": None}
         llm_cost = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0}
         report = None
+        report_id = preset_report_id or str(uuid4())
+        dedup_key = dedup_key or options.get("override_dedup_key") or f"{run_id}_{project_id}"
+        retry_of_report_id = options.get("retry_of_report_id")
 
         try:
+            await self._notify_progress(project_id, report_id, "collecting", "正在采集失败日志...", 10)
             # Phase 1: 采集失败日志（含脱敏）
             try:
                 logs = await asyncio.wait_for(self._collect_failure_logs(run_id), timeout=self.DB_TIMEOUT)
@@ -99,13 +109,20 @@ class TestDiagnosisService:
             if not logs:
                 logs = self._parse_from_test_output(options.get("test_output", ""))
                 if not logs:
-                    report = self._empty_report(run_id, degradation, preset_report_id)
+                    report = self._empty_report(
+                        run_id, degradation, preset_report_id=report_id,
+                        project_id=project_id, dedup_key=dedup_key,
+                    )
 
             if report is None:
                 # Phase 2: 分类失败模式
-                classified = await self._classify_failures(logs)
+                await self._notify_progress(project_id, report_id, "classifying", "正在分类失败模式...", 30)
+                classified, llm_all_failed, llm_used = await self._classify_failures(logs, llm_cost)
+                if llm_all_failed:
+                    degradation["has_llm_analysis"] = False
 
                 # Phase 3: KG 代码定位（批量并行）
+                await self._notify_progress(project_id, report_id, "locating", "正在定位相关代码...", 60)
                 findings = []
                 if degradation["has_db_logs"] and classified and project_identifier:
                     batch_size = 10
@@ -134,14 +151,25 @@ class TestDiagnosisService:
                         findings.append({**failure, "code_locations": []})
 
                 # Phase 4: 生成修复建议
-                report = self._generate_report(findings, degradation, llm_cost, run_id, project_id, preset_report_id)
+                report = self._generate_report(
+                    findings, degradation, llm_cost, run_id, project_id,
+                    preset_report_id=report_id, dedup_key=dedup_key,
+                    retry_of_report_id=retry_of_report_id, llm_used=llm_used,
+                )
 
         except Exception as e:
-            report = self._emergency_report(run_id, str(e), preset_report_id)
+            report = self._emergency_report(
+                run_id, str(e), preset_report_id=report_id,
+                project_id=project_id, dedup_key=dedup_key,
+            )
 
         # Phase 5: 持久化（空报告也需要保存以更新 analyzing 记录）
         if report is None:
-            report = self._empty_report(run_id, degradation, preset_report_id)
+            report = self._empty_report(
+                run_id, degradation, preset_report_id=report_id,
+                project_id=project_id, dedup_key=dedup_key,
+            )
+        await self._notify_progress(project_id, report_id, "saving", "正在保存诊断报告...", 90)
         report.analysis_duration_ms = int((time.monotonic() - start_time) * 1000)
         try:
             await self._save_report(report)
@@ -277,7 +305,7 @@ class TestDiagnosisService:
                 deduped.append(log)
         return deduped
 
-    async def _classify_failures(self, logs: list[dict]) -> list[dict]:
+    async def _classify_failures(self, logs: list[dict], llm_cost: dict) -> tuple[list[dict], bool, bool]:
         rules = self._load_failure_rules()
         results = []
         llm_candidates = []
@@ -299,12 +327,13 @@ class TestDiagnosisService:
             if not matched:
                 llm_candidates.append(log)
 
-        # LLM 兜底
+        llm_all_failed = False
+        llm_used = False
         if llm_candidates:
-            llm_results = await self._llm_classify(llm_candidates)
+            llm_results, llm_all_failed, llm_used = await self._llm_classify(llm_candidates, llm_cost)
             results.extend(llm_results)
 
-        return self._merge_with_logs(results, logs)
+        return self._merge_with_logs(results, logs), llm_all_failed, llm_used
 
     def _match_rule(self, log: dict, rule: dict) -> bool:
         status_ok = True
@@ -345,19 +374,19 @@ class TestDiagnosisService:
             logger.error(f"加载规则库失败: {e}")
             return []
 
-    async def _llm_classify(self, logs: list[dict]) -> list[dict]:
-        # 分层抽样 + LLM 兜底
-        # 简化实现：先检查缓存，未命中时按关键词简单分类
-        # 实际生产环境应调用 LLM
+    async def _llm_classify(self, logs: list[dict], llm_cost: dict) -> tuple[list[dict], bool, bool]:
         results = []
-        for log in logs:
-            # 检查缓存
-            cached = await self.cache.get(
-                log.get("status_code", 0),
-                log.get("method", ""),
-                log.get("endpoint", ""),
-                log.get("error_message", "")
-            )
+        llm_attempts = 0
+        llm_failures = 0
+        llm_used = False
+
+        for log in logs[:self.MAX_LLM_ANALYSIS]:
+            status_code = log.get("status_code", 0)
+            method = log.get("method", "")
+            endpoint = log.get("endpoint", "")
+            error_message = log.get("error_message", "")
+
+            cached = await self.cache.get(status_code, method, endpoint, error_message)
             if cached:
                 results.append({
                     "log": log,
@@ -366,25 +395,70 @@ class TestDiagnosisService:
                     "classifier": "llm",
                     "matching_rule": None,
                     "llm_cache_hit": True,
+                    "reason": cached.get("reason", ""),
                 })
+                llm_used = True
                 continue
 
-            # 未命中则按关键词简单分类（避免实际 LLM 调用使服务变重）
-            # 实际生产环境应调用 LLM
-            msg = str(log.get("error_message", "")).lower()
-            if "token" in msg or "unauthorized" in msg or "jwt" in msg:
-                results.append({"log": log, "type": "token_expired", "confidence": 0.7, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
-            elif "forbidden" in msg or "permission" in msg:
-                results.append({"log": log, "type": "permission_denied", "confidence": 0.7, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
-            elif "not found" in msg or "no route" in msg:
-                results.append({"log": log, "type": "api_changed", "confidence": 0.7, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
-            elif "timeout" in msg or "refused" in msg:
-                results.append({"log": log, "type": "network_timeout", "confidence": 0.7, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
-            elif "typeerror" in msg or "referenceerror" in msg:
-                results.append({"log": log, "type": "script_error", "confidence": 0.7, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
+            llm_attempts += 1
+            response_body = ""
+            response = log.get("response", {})
+            if isinstance(response, dict):
+                body = response.get("body", "")
+                response_body = json.dumps(body, ensure_ascii=False) if isinstance(body, dict) else str(body)
+
+            try:
+                classification, usage = await asyncio.wait_for(
+                    classify_failure_with_llm(
+                        endpoint=endpoint,
+                        method=method,
+                        status_code=status_code,
+                        error_message=error_message,
+                        response_body=response_body,
+                    ),
+                    timeout=self.LLM_TIMEOUT,
+                )
+            except (asyncio.TimeoutError, Exception) as e:
+                logger.warning(f"LLM 分类超时或失败: {e}")
+                classification = keyword_classify(error_message)
+                classification["reason"] = f"LLM 调用失败: {e}，使用关键词兜底"
+                usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "total_cost_usd": 0.0}
+                llm_failures += 1
             else:
-                results.append({"log": log, "type": "unknown", "confidence": 0.5, "classifier": "llm", "matching_rule": None, "llm_cache_hit": False})
-        return results
+                llm_used = True
+                await self.cache.set(status_code, method, endpoint, error_message, {
+                    "type": classification["type"],
+                    "confidence": classification["confidence"],
+                    "reason": classification.get("reason", ""),
+                })
+
+            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                llm_cost[key] = llm_cost.get(key, 0) + usage.get(key, 0)
+
+            results.append({
+                "log": log,
+                "type": classification.get("type", "unknown"),
+                "confidence": classification.get("confidence", 0.5),
+                "classifier": "llm",
+                "matching_rule": None,
+                "llm_cache_hit": False,
+                "reason": classification.get("reason", ""),
+            })
+
+        for log in logs[self.MAX_LLM_ANALYSIS:]:
+            kw = keyword_classify(log.get("error_message", ""))
+            results.append({
+                "log": log,
+                "type": kw["type"],
+                "confidence": kw["confidence"],
+                "classifier": "llm",
+                "matching_rule": None,
+                "llm_cache_hit": False,
+                "reason": kw.get("reason", ""),
+            })
+
+        llm_all_failed = llm_attempts > 0 and llm_failures == llm_attempts
+        return results, llm_all_failed, llm_used
 
     def _merge_with_logs(self, classified: list[dict], logs: list[dict]) -> list[dict]:
         return classified
@@ -393,6 +467,8 @@ class TestDiagnosisService:
         """多策略并行级联定位"""
         if not project_identifier:
             return []
+        from app.agents.log_analysis.tools.kg_integration_tools import KGIntegrationTools
+
         kg = KGIntegrationTools(project_identifier)
         endpoint = failure.get("log", {}).get("endpoint", "")
         error_msg = failure.get("log", {}).get("error_message", "")
@@ -465,7 +541,10 @@ class TestDiagnosisService:
 
         return locations
 
-    def _generate_report(self, findings, degradation, llm_cost, run_id, project_id, preset_report_id=None) -> DiagnosisReport:
+    def _generate_report(
+        self, findings, degradation, llm_cost, run_id, project_id,
+        preset_report_id=None, dedup_key=None, retry_of_report_id=None, llm_used=False,
+    ) -> DiagnosisReport:
         root_cause_counts = {
             "token_expired": 0, "permission_denied": 0, "api_changed": 0,
             "data_error": 0, "network_timeout": 0, "script_error": 0, "unknown": 0
@@ -482,31 +561,39 @@ class TestDiagnosisService:
             run_id=run_id,
             project_id=project_id,
             status="completed",
-            dedup_key=f"{run_id}_{project_id}",
+            dedup_key=dedup_key or f"{run_id}_{project_id}",
+            retry_of_report_id=retry_of_report_id,
             source_type="api_test",
             test_type="single",
             degradation=degradation,
             summary={"total_failures": len(findings), "root_cause_counts": root_cause_counts},
             findings=[self._finding_to_dict(f) for f in findings],
             llm_token_cost=llm_cost,
+            llm_provider="deepseek" if llm_used else "local",
             completed_at=datetime.now(timezone.utc),
         )
 
     def _finding_to_dict(self, finding: dict) -> dict:
         log = finding.get("log", {})
+        code_locations = finding.get("code_locations", [])
+        endpoint = log.get("endpoint", "")
+        root_cause_type = finding.get("type", "unknown")
+        error_message = log.get("error_message", "")
         return {
             "failure_id": str(uuid4()),
-            "endpoint": log.get("endpoint", ""),
+            "endpoint": endpoint,
             "method": log.get("method", ""),
             "status_code": log.get("status_code", 0),
-            "error_message": log.get("error_message", ""),
-            "root_cause_type": finding.get("type", "unknown"),
-            "root_cause_detail": "",
+            "error_message": error_message,
+            "root_cause_type": root_cause_type,
+            "root_cause_detail": finding.get("reason", ""),
             "classifier": finding.get("classifier", "rule"),
             "matching_rule": finding.get("matching_rule"),
-            "code_locations": finding.get("code_locations", []),
-            "affects_apis": [],
-            "fix_suggestions": [],
+            "code_locations": code_locations,
+            "affects_apis": extract_affects_apis(code_locations, endpoint=endpoint),
+            "fix_suggestions": generate_fix_suggestions(
+                root_cause_type, code_locations, endpoint=endpoint, error_message=error_message,
+            ),
             "llm_cache_hit": finding.get("llm_cache_hit", False),
         }
 
@@ -612,6 +699,20 @@ class TestDiagnosisService:
             completed_at=pg_report.completed_at or datetime.now(timezone.utc),
         )
 
+    async def _notify_progress(self, project_id: str, report_id: str, phase: str, message: str, progress: int):
+        if not project_id:
+            return
+        try:
+            await ws_manager.send_progress(project_id, {
+                "type": "diagnosis_progress",
+                "report_id": report_id,
+                "phase": phase,
+                "message": message,
+                "progress": progress,
+            })
+        except Exception as e:
+            logger.warning(f"推送诊断进展失败: {e}")
+
     async def _notify_frontend(self, report: DiagnosisReport):
         await ws_manager.send_completed(
             report.project_id,
@@ -624,13 +725,16 @@ class TestDiagnosisService:
             }
         )
 
-    def _empty_report(self, run_id: str, degradation: dict, preset_report_id=None) -> DiagnosisReport:
+    def _empty_report(
+        self, run_id: str, degradation: dict, preset_report_id=None,
+        project_id: str = "", dedup_key: str = None,
+    ) -> DiagnosisReport:
         return DiagnosisReport(
             report_id=preset_report_id or str(uuid4()),
             run_id=run_id,
-            project_id="",
+            project_id=project_id,
             status="completed",
-            dedup_key=run_id,
+            dedup_key=dedup_key or run_id,
             degradation=degradation,
             summary={"total_failures": 0, "root_cause_counts": {}},
             findings=[],
@@ -638,13 +742,16 @@ class TestDiagnosisService:
             completed_at=datetime.now(timezone.utc),
         )
 
-    def _emergency_report(self, run_id: str, error: str, preset_report_id=None) -> DiagnosisReport:
+    def _emergency_report(
+        self, run_id: str, error: str, preset_report_id=None,
+        project_id: str = "", dedup_key: str = None,
+    ) -> DiagnosisReport:
         return DiagnosisReport(
             report_id=preset_report_id or str(uuid4()),
             run_id=run_id,
-            project_id="",
+            project_id=project_id,
             status="failed",
-            dedup_key=run_id,
+            dedup_key=dedup_key or run_id,
             degradation={"has_db_logs": False, "has_kg_locations": False, "has_llm_analysis": False, "fallback_reason": f"诊断引擎崩溃: {error[:200]}"},
             summary={"total_failures": 0, "root_cause_counts": {}},
             findings=[],

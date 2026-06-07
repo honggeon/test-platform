@@ -21,6 +21,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select
 
 from app.api import api_router
+from app.api.auth import router as auth_router
+from app.config.auth_database import init_auth_db
 from app.config.settings import settings
 from app.config.database import engine, MongoDB, async_session_factory
 from app.middleware.rate_limiter import RateLimiterMiddleware
@@ -98,15 +100,38 @@ async def lifespan(app: FastAPI):
     # 连接 MongoDB
     # await MongoDB.connect()
 
-    # 创建数据库表（开发环境）
-    if settings.debug:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
+    # 初始化认证 SQLite 数据库（独立于 PostgreSQL，优先启动）
+    await init_auth_db()
+    print("[OK] Auth database ready")
 
-    # 确保默认用户存在
-    await ensure_default_user()
+    # 创建 PostgreSQL 表 / 默认用户（失败不阻塞认证接口）
+    try:
+        if settings.debug:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+        await ensure_default_user()
+    except Exception as e:
+        print(f"[WARN] PostgreSQL startup skipped: {e}")
+
+    from app.services.test_diagnosis_service import TestDiagnosisService
+    from app.services.diagnosis_redis import create_redis_client, close_redis_client
+    from app.services.diagnosis_notification_service import manager as ws_manager
+
+    try:
+        svc = TestDiagnosisService()
+        await svc.ensure_ttl_index()
+    except Exception as e:
+        print(f"[WARN] Diagnosis TTL index setup failed: {e}")
+
+    redis_client = await create_redis_client(settings.redis_url)
+    app.state.redis_client = redis_client
+    if redis_client:
+        ws_manager.configure_redis(redis_client)
+        print("[OK] Diagnosis WebSocket Redis Pub/Sub enabled")
 
     yield
+
+    await close_redis_client(getattr(app.state, "redis_client", None))
 
     # 关闭时
     # 断开 MongoDB 连接
@@ -170,6 +195,7 @@ def create_app() -> FastAPI:
     
     # 注册 API 路由
     app.include_router(api_router)
+    app.include_router(auth_router)
     
     # 健康检查端点
     @app.get("/health", tags=["系统"])
@@ -198,6 +224,14 @@ def create_app() -> FastAPI:
 app = create_app()
 
 if __name__ == "__main__":
+    import argparse
+
     import uvicorn
 
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    parser = argparse.ArgumentParser(description="测试管理系统 API 服务")
+    parser.add_argument("--host", default="0.0.0.0", help="绑定的主机地址 (默认: 0.0.0.0)")
+    parser.add_argument("--port", type=int, default=8000, help="绑定的端口 (默认: 8000)")
+    parser.add_argument("--reload", action="store_true", help="启用热重载（开发模式）")
+    args = parser.parse_args()
+
+    uvicorn.run(app, host=args.host, port=args.port, reload=args.reload)
